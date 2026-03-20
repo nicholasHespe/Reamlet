@@ -8,39 +8,38 @@ export class Annotator {
    */
   constructor(pages) {
     this.pages       = pages;
-    this.annotations = []; // flat list of annotation objects for this document
-    this.tool        = 'select'; // 'select'|'draw'|'highlight'|'text'|'line'|'rect'|'oval'|'arrow'|'eraser'
+    this.annotations = [];
+    this.tool        = 'select';
     this.color       = '#f5c518';
     this.thickness   = 3;
+    this.textBold      = false;
+    this.textUnderline = false;
 
     this._drawing     = false;
-    this._currentPath = null;  // { pageNum, points, color, thickness }
-    this._shapeStart  = null;  // { pageNum, pos: [x,y], p } — in-progress shape
+    this._currentPath = null;
+    this._shapeStart  = null;
 
-    // Undo/redo: array of JSON-serialised snapshots; _histIdx points at current state
     this._history = ['[]'];
     this._histIdx = 0;
 
-    this._handlers = {}; // pageNum -> { onDown, onMove, onUp, canvas }
-
+    this._handlers = {};
     this._attachAll();
   }
 
   setTool(tool) {
     this.tool = tool;
     this._updateCursors();
-    // Canvas captures events for tools that draw directly on it.
-    // Highlight and select need events to pass through to the text layer.
     const canvasCaptures = ['draw', 'text', 'line', 'rect', 'oval', 'arrow', 'eraser'].includes(tool);
     this.pages.forEach(p => {
       p.annotCanvas.style.pointerEvents = canvasCaptures ? 'auto' : 'none';
     });
   }
 
-  setColor(color) { this.color = color; }
-  setThickness(t) { this.thickness = t; }
+  setColor(color)       { this.color       = color; }
+  setThickness(t)       { this.thickness   = t; }
+  setTextBold(b)        { this.textBold      = b; }
+  setTextUnderline(b)   { this.textUnderline = b; }
 
-  // Remove all annotations and clear all canvases
   clear() {
     this.annotations = [];
     this.pages.forEach(p => {
@@ -51,7 +50,6 @@ export class Annotator {
     this._histIdx = 0;
   }
 
-  // Redraw all stored annotations (call after zoom re-render)
   redrawAll() {
     this.pages.forEach((p, idx) => this._redrawPage(p, idx + 1));
   }
@@ -76,9 +74,6 @@ export class Annotator {
 
   _attachAll() {
     this.pages.forEach((p, idx) => this._attachPage(p, idx + 1));
-    // Highlight: listen on document so selection can span page boundaries.
-    // Canvas has pointer-events:none in highlight mode so the text layer
-    // handles mouse events; we capture the resulting browser selection on mouseup.
     document.addEventListener('mouseup', (e) => {
       if (this.tool !== 'highlight') return;
       const wrapper = e.target.closest?.('.page-wrapper');
@@ -97,20 +92,17 @@ export class Annotator {
     const onDown = (e) => {
       if (e.button !== 0) return;
       if (this.tool === 'draw') {
-        const pos = this._canvasPos(canvas, e);
         this._drawing = true;
-        this._currentPath = { pageNum, points: [pos], color: this.color, thickness: this.thickness };
+        this._currentPath = { pageNum, points: [this._canvasPos(canvas, e)], color: this.color, thickness: this.thickness };
       } else if (shapeTools.includes(this.tool)) {
         this._shapeStart = { pageNum, pos: this._canvasPos(canvas, e), p };
       }
-      // text and eraser act on mouseup to avoid focus/click conflicts
     };
 
     const onMove = (e) => {
       if (this.tool === 'draw' && this._drawing) {
         const pos = this._canvasPos(canvas, e);
         this._currentPath.points.push(pos);
-        // Incremental live stroke — only draw the latest segment
         const ctx = canvas.getContext('2d');
         const pts = this._currentPath.points;
         if (pts.length < 2) return;
@@ -125,7 +117,6 @@ export class Annotator {
         ctx.stroke();
         ctx.restore();
       } else if (this._shapeStart?.pageNum === pageNum && shapeTools.includes(this.tool)) {
-        // Show live preview of the in-progress shape
         const [x2, y2] = this._constrainShape(this.tool, ...this._shapeStart.pos, ...this._canvasPos(canvas, e), e.shiftKey);
         this._redrawPage(p, pageNum);
         this._drawPreview(canvas, this._shapeStart.pos, [x2, y2]);
@@ -154,7 +145,6 @@ export class Annotator {
         const [x1, y1] = this._shapeStart.pos;
         const [x2, y2] = this._constrainShape(this.tool, x1, y1, ...this._canvasPos(canvas, e), e.shiftKey);
         this._shapeStart = null;
-        // Ignore near-zero shapes (accidental click without drag)
         if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
           const w = canvas.width, h = canvas.height;
           this.annotations.push({
@@ -170,7 +160,6 @@ export class Annotator {
         this._redrawPage(p, pageNum);
 
       } else if (this.tool === 'text') {
-        // Place text box on mouseup so click has fully resolved before we steal focus
         this._placeTextBox(p, pageNum, this._canvasPos(canvas, e));
 
       } else if (this.tool === 'eraser') {
@@ -191,7 +180,9 @@ export class Annotator {
     this._handlers[pageNum] = { onDown, onMove, onUp, canvas };
   }
 
-  // Read browser text selection and record it as a highlight annotation
+  // Capture the browser text selection as a highlight annotation.
+  // Uses the computed font-size of each selected span to size rects accurately,
+  // avoiding the extra line-height that raw getClientRects() includes.
   _captureHighlight(p, pageNum) {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed) return;
@@ -203,14 +194,25 @@ export class Annotator {
     for (let i = 0; i < sel.rangeCount; i++) {
       const range = sel.getRangeAt(i);
       for (const r of range.getClientRects()) {
-        if (r.width < 1) continue; // skip zero-width cursor rects
-        // Trim 20% from top and bottom to reduce inter-line overlap
-        const trimV = r.height * 0.20;
+        if (r.width < 1) continue;
+
+        // Find the PDF.js text span at this position to read its actual font-size.
+        // elementFromPoint skips pointer-events:none elements (annot-canvas),
+        // so it sees through to the text layer span.
+        const el   = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        const span = el?.closest?.('.textLayer span');
+        let textH  = r.height * 0.55; // fallback: 55% of rect if no span found
+        if (span) {
+          const fs = parseFloat(window.getComputedStyle(span).fontSize);
+          if (fs > 0) textH = Math.min(fs * 1.25, r.height * 0.9);
+        }
+
+        const trimV = (r.height - textH) / 2;
         rects.push({
-          x:      (r.left   - wrapRect.left) / wrapRect.width,
-          y:      (r.top    - wrapRect.top + trimV) / wrapRect.height,
-          width:  r.width   / wrapRect.width,
-          height: (r.height - trimV * 2) / wrapRect.height,
+          x:      (r.left - wrapRect.left) / wrapRect.width,
+          y:      (r.top  - wrapRect.top + trimV) / wrapRect.height,
+          width:  r.width  / wrapRect.width,
+          height: textH    / wrapRect.height,
         });
       }
     }
@@ -220,12 +222,11 @@ export class Annotator {
     const annot = { type: 'highlight', pageNum, rects, color: this.color };
     this.annotations.push(annot);
     this._pushHistory();
-
     const ctx = p.annotCanvas.getContext('2d');
     this._drawAnnotation(ctx, annot, p.annotCanvas.width, p.annotCanvas.height);
   }
 
-  // Place an editable textarea styled to match what the canvas will render
+  // Place an editable textarea styled to preview the final canvas output
   _placeTextBox(p, pageNum, [cx, cy]) {
     const wrapper  = p.wrapper;
     const canvas   = p.annotCanvas;
@@ -233,28 +234,34 @@ export class Annotator {
     const fontSize = 13;
     const scaleX   = wrapper.offsetWidth  / w;
     const scaleY   = wrapper.offsetHeight / h;
+    const weight   = this.textBold      ? 'bold'      : 'normal';
+    const decor    = this.textUnderline ? 'underline' : 'none';
 
     const ta = document.createElement('textarea');
     ta.style.cssText = `
-      position:   absolute;
-      left:       ${cx * scaleX}px;
-      top:        ${cy * scaleY}px;
-      min-width:  120px;
-      min-height: ${fontSize + 6}px;
-      background: transparent;
-      border:     1px dashed rgba(128,128,128,0.6);
-      font:       ${fontSize}px system-ui, sans-serif;
-      color:      ${this.color};
-      line-height:${fontSize + 2}px;
-      caret-color:${this.color};
-      resize:     both;
-      z-index:    10;
-      outline:    none;
-      padding:    0;
-      overflow:   hidden;
+      position:        absolute;
+      left:            ${cx * scaleX}px;
+      top:             ${cy * scaleY}px;
+      min-width:       120px;
+      min-height:      ${fontSize + 6}px;
+      background:      transparent;
+      border:          1px dashed rgba(128,128,128,0.6);
+      font:            ${weight} ${fontSize}px system-ui, sans-serif;
+      color:           ${this.color};
+      text-decoration: ${decor};
+      line-height:     ${fontSize + 2}px;
+      caret-color:     ${this.color};
+      resize:          both;
+      z-index:         10;
+      outline:         none;
+      padding:         0;
+      overflow:        hidden;
     `;
     wrapper.appendChild(ta);
     ta.focus();
+
+    const bold      = this.textBold;
+    const underline = this.textUnderline;
 
     let committed = false;
     const commit = () => {
@@ -264,13 +271,15 @@ export class Annotator {
       ta.remove();
       if (!text) return;
       const annot = {
-        type:     'text',
+        type:      'text',
         pageNum,
-        x:        cx / w,
-        y:        cy / h,
+        x:         cx / w,
+        y:         cy / h,
         text,
-        color:    this.color,
+        color:     this.color,
         fontSize,
+        bold,
+        underline,
       };
       this.annotations.push(annot);
       this._pushHistory();
@@ -286,7 +295,6 @@ export class Annotator {
 
   // ── Private: hit testing ────────────────────────────────────
 
-  // Return the index of the topmost annotation under (nx, ny) on pageNum, or -1
   _hitTest(pageNum, nx, ny) {
     for (let i = this.annotations.length - 1; i >= 0; i--) {
       const a = this.annotations[i];
@@ -329,7 +337,6 @@ export class Annotator {
 
   // ── Private: shape helpers ──────────────────────────────────
 
-  // Constrain end point when shift is held: square/circle or 45° snap
   _constrainShape(tool, x1, y1, x2, y2, shift) {
     if (!shift) return [x2, y2];
     if (tool === 'rect' || tool === 'oval') {
@@ -346,7 +353,6 @@ export class Annotator {
     return [x2, y2];
   }
 
-  // Draw a dashed preview of the in-progress shape on top of the annotation canvas
   _drawPreview(canvas, [x1, y1], [x2, y2]) {
     const ctx = canvas.getContext('2d');
     ctx.save();
@@ -360,18 +366,15 @@ export class Annotator {
     ctx.restore();
   }
 
-  // Draw a shape using canvas-pixel coordinates
   _drawShape(ctx, type, x1, y1, x2, y2) {
     if (type === 'line') {
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
-
     } else if (type === 'rect') {
       ctx.beginPath();
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-
     } else if (type === 'oval') {
       const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
       const rx = Math.max(Math.abs(x2 - x1) / 2, 1);
@@ -379,7 +382,6 @@ export class Annotator {
       ctx.beginPath();
       ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
       ctx.stroke();
-
     } else if (type === 'arrow') {
       const headLen = Math.max(10, ctx.lineWidth * 4);
       const angle   = Math.atan2(y2 - y1, x2 - x1);
@@ -387,7 +389,6 @@ export class Annotator {
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
-      // Solid filled arrowhead at the tip
       ctx.setLineDash([]);
       ctx.fillStyle = ctx.strokeStyle;
       ctx.beginPath();
@@ -401,7 +402,6 @@ export class Annotator {
 
   // ── Private: drawing ───────────────────────────────────────
 
-  // Clear a single page canvas and redraw all stored annotations for it
   _redrawPage(p, pageNum) {
     const ctx = p.annotCanvas.getContext('2d');
     const { width: w, height: h } = p.annotCanvas;
@@ -433,10 +433,17 @@ export class Annotator {
       });
 
     } else if (annot.type === 'text') {
+      const weight = annot.bold ? 'bold ' : '';
       ctx.fillStyle = annot.color;
-      ctx.font      = `${annot.fontSize}px system-ui, sans-serif`;
+      ctx.font      = `${weight}${annot.fontSize}px system-ui, sans-serif`;
       annot.text.split('\n').forEach((line, i) => {
-        ctx.fillText(line, annot.x * w, annot.y * h + i * (annot.fontSize + 2) + annot.fontSize);
+        const x = annot.x * w;
+        const y = annot.y * h + i * (annot.fontSize + 2) + annot.fontSize;
+        ctx.fillText(line, x, y);
+        if (annot.underline) {
+          const metrics = ctx.measureText(line);
+          ctx.fillRect(x, y + 2, metrics.width, Math.max(1, annot.fontSize / 12));
+        }
       });
 
     } else if (['line', 'rect', 'oval', 'arrow'].includes(annot.type)) {
@@ -476,7 +483,6 @@ export class Annotator {
   // ── Private: undo/redo history ──────────────────────────────
 
   _pushHistory() {
-    // Trim any redo future, then push the current state
     this._history.splice(this._histIdx + 1);
     this._history.push(JSON.stringify([...this.annotations]));
     this._histIdx++;
