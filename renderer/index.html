@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!-- PDFox — SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' file:; script-src 'self' 'unsafe-eval' file:; style-src 'self' 'unsafe-inline'; worker-src blob: file:;" />
+  <title>PDFox</title>
+  <link rel="stylesheet" href="../assets/style.css" />
+</head>
+<body>
+  <!-- Top bar: toolbar left, tab bar right -->
+  <div id="topbar">
+    <div id="toolbar">
+      <button id="btn-open"  title="Open PDF (Ctrl+O)">Open</button>
+      <span class="sep"></span>
+      <button id="tool-select"    class="tool-btn active" title="Select / Pan (Esc)"  data-tool="select">&#x2B1C;</button>
+      <button id="tool-draw"      class="tool-btn" title="Draw (D)"          data-tool="draw">&#x270F;</button>
+      <button id="tool-highlight" class="tool-btn" title="Highlight (H)"     data-tool="highlight">&#x25A0;</button>
+      <button id="tool-text"      class="tool-btn" title="Text box (T)"      data-tool="text">A</button>
+      <span class="sep"></span>
+      <button id="tool-line"      class="tool-btn" title="Line (L)"          data-tool="line">&#x2571;</button>
+      <button id="tool-rect"      class="tool-btn" title="Rectangle (R)"     data-tool="rect">&#x25AD;</button>
+      <button id="tool-oval"      class="tool-btn" title="Oval (O)"          data-tool="oval">&#x25EF;</button>
+      <button id="tool-arrow"     class="tool-btn" title="Arrow (A)"         data-tool="arrow">&#x2192;</button>
+      <span class="sep"></span>
+      <button id="tool-eraser"    class="tool-btn" title="Eraser (E)"        data-tool="eraser">&#x232B;</button>
+      <span class="sep"></span>
+      <button id="btn-undo"   title="Undo (Ctrl+Z)">&#x21A9;</button>
+      <button id="btn-redo"   title="Redo (Ctrl+Y)">&#x21AA;</button>
+      <span class="sep"></span>
+      <button id="btn-fit"    title="Fit Width (Ctrl+0)">&#x21D4;</button>
+      <button id="btn-rotate" title="Rotate 90° CW — Shift+click for current page only">&#x21BB;</button>
+      <button id="btn-print"  title="Print (Ctrl+P)">&#x2399;</button>
+      <span class="sep"></span>
+      <input  id="color-picker" type="color" value="#f5c518" title="Colour" />
+      <input  id="thickness"    type="range" min="1" max="20" value="3" title="Thickness" />
+    </div>
+    <div id="tab-bar"></div>
+  </div>
+
+  <!-- Content area below topbar: TOC sidebar + viewer host -->
+  <div id="content-area">
+
+    <!-- Table of contents sidebar (hidden when PDF has no outline) -->
+    <div id="toc-panel" class="collapsed hidden">
+      <div id="toc-header">
+        <button id="toc-toggle" title="Toggle contents">&#x2630;</button>
+        <span   id="toc-title">Contents</span>
+      </div>
+      <div id="toc-tree"></div>
+    </div>
+
+    <!-- All viewer panes live here; only the active one is visible -->
+    <div id="viewer-host"></div>
+  </div>
+
+  <!-- Empty state shown when no tabs are open -->
+  <div id="empty-state">
+    <p>No file open.<br>Press <kbd>Ctrl+O</kbd> to open a PDF.</p>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
