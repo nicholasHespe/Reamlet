@@ -1,54 +1,244 @@
 // PDFox — renderer entry point
-// Manages tabs, keyboard shortcuts, and wires together viewer + annotator + saver.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PDFViewer }  from './viewer.js';
-import { Annotator }  from './annotator.js';
+import { PDFViewer }        from './viewer.js';
+import { Annotator }        from './annotator.js';
 import { embedAnnotations } from './saver.js';
+import { PDFDocument }      from '../node_modules/pdf-lib/dist/pdf-lib.esm.js';
 
 // ── State ──────────────────────────────────────────────────────
 
 const tabs      = [];
 let   activeTab = null;
-let   _paneScrollCleanup = null; // removes the scroll listener for the current pane
+let   _paneScrollCleanup = null;
+
+// Tab drag state (same-window reorder)
+let _draggedTab      = null;
+let _dropHandled     = false;
+// Timer ID for the "open new window" fallback in dragend; cancelled by cross-window IPC
+let _newWindowTimer  = null;
+// Set true once we've called focusWindow() during an external drag-over to avoid repeat calls
+let _dragOverFocused = false;
+
+// Recently closed tabs stack for Ctrl+Shift+T
+const _closedTabStack = []; // [{ filePath }]
+
+// Zoom debounce state
+let _zoomTimer  = null; // setTimeout handle for deferred re-render
+let _zoomTarget = null; // accumulated target scale while debounce is pending
+
+// Custom scrollbar drag state
+let _sbDragging        = false;
+let _sbDragStartY      = 0;
+let _sbDragStartScroll = 0;
+
+// Native file drag state (drag-to-external-app)
+let _nativeDrag = null; // { filePath, x, y } while tracking mousedown before threshold
+
+// Context for the close-confirm modal: null | { type:'window' } | { type:'tab', tab }
+let _closeContext = null;
+
+// Window identity (obtained from main process at startup)
+let myWindowId = null;
 
 // ── DOM refs ───────────────────────────────────────────────────
 
+const sidebar             = document.getElementById('sidebar');
+const viewerScrollbar     = document.getElementById('viewer-scrollbar');
+const viewerScrollbarThumb = document.getElementById('viewer-scrollbar-thumb');
 const tabBar         = document.getElementById('tab-bar');
+const toolsPanel     = document.getElementById('tools-panel');
 const viewerHost     = document.getElementById('viewer-host');
 const emptyState     = document.getElementById('empty-state');
 const thicknessInput = document.getElementById('thickness');
 const tocPanel       = document.getElementById('toc-panel');
-const tocToggle      = document.getElementById('toc-toggle');
 const tocTree        = document.getElementById('toc-tree');
 const pageInput      = document.getElementById('page-input');
 const pageTotal      = document.getElementById('page-total');
 const btnBold        = document.getElementById('btn-bold');
 const btnUnderline   = document.getElementById('btn-underline');
+const fontSizeInput  = document.getElementById('font-size-input');
+const colorBtn       = document.getElementById('color-btn');
+const colorDot       = document.getElementById('color-dot');
+const colorPanel     = document.getElementById('color-panel');
+
+// ── Window ID ──────────────────────────────────────────────────
+
+window.api.getWindowId().then(id => { myWindowId = id; });
+
+// ── Sidebar mode switch ────────────────────────────────────────
+
+document.querySelectorAll('.sidebar-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar-mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const mode = btn.dataset.mode;
+    tabBar.classList.toggle('active',     mode === 'tabs');
+    toolsPanel.classList.toggle('active', mode === 'tools');
+  });
+});
+
+// ── Custom scrollbar ───────────────────────────────────────────
+
+// Update thumb size and position to match the active pane's scroll state.
+function _syncScrollbar() {
+  if (!activeTab) { viewerScrollbar.style.display = 'none'; return; }
+  const pane = activeTab.pane;
+  const scrollH = pane.scrollHeight;
+  const clientH = pane.clientHeight;
+  if (scrollH <= clientH) { viewerScrollbar.style.display = 'none'; return; }
+  viewerScrollbar.style.display = 'block';
+  const trackH  = viewerScrollbar.clientHeight;
+  const thumbH  = Math.max(30, Math.round((clientH / scrollH) * trackH));
+  const maxScroll   = scrollH - clientH;
+  const maxThumbTop = trackH - thumbH;
+  const thumbTop = Math.round((pane.scrollTop / maxScroll) * maxThumbTop);
+  viewerScrollbarThumb.style.height = `${thumbH}px`;
+  viewerScrollbarThumb.style.top    = `${thumbTop}px`;
+}
+
+// Move the scrollbar track so it sits just left of the toc-panel whenever it's visible.
+const SCROLLBAR_GAP = 6; // px gap between scrollbar and toc panel / window edge
+function _positionScrollbar() {
+  const base = !tocPanel.classList.contains('hidden') ? tocPanel.offsetWidth : 0;
+  viewerScrollbar.style.right = `${base + SCROLLBAR_GAP}px`;
+  _syncScrollbar();
+}
+
+// Jump scroll on track click (not thumb)
+viewerScrollbar.addEventListener('mousedown', (e) => {
+  if (e.target === viewerScrollbarThumb || !activeTab) return;
+  const rect  = viewerScrollbar.getBoundingClientRect();
+  const ratio = (e.clientY - rect.top) / rect.height;
+  activeTab.pane.scrollTop = ratio * (activeTab.pane.scrollHeight - activeTab.pane.clientHeight);
+});
+
+// Thumb drag start
+viewerScrollbarThumb.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  _sbDragging        = true;
+  _sbDragStartY      = e.clientY;
+  _sbDragStartScroll = activeTab?.pane.scrollTop ?? 0;
+  viewerScrollbarThumb.classList.add('dragging');
+  document.body.style.userSelect = 'none';
+});
+
+// ── Colour picker ──────────────────────────────────────────────
+
+colorBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  colorPanel.classList.toggle('hidden');
+});
+
+// Close colour panel when clicking anywhere else
+document.addEventListener('click', () => colorPanel.classList.add('hidden'));
+colorPanel.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Resize handles ─────────────────────────────────────────────
+
+const sidebarResizeHandle = document.getElementById('sidebar-resize');
+const tocResizeHandle     = document.getElementById('toc-resize');
+const SIDEBAR_MIN = 120;
+const TOC_MIN     = 120;
+
+let _resizingSidebar = false;
+let _resizingToc     = false;
+
+sidebarResizeHandle.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  _resizingSidebar = true;
+  sidebarResizeHandle.classList.add('resizing');
+  document.body.style.cursor     = 'ew-resize';
+  document.body.style.userSelect = 'none';
+});
+
+tocResizeHandle.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  _resizingToc = true;
+  tocResizeHandle.classList.add('resizing');
+  tocPanel.classList.add('resizing');
+  document.body.style.cursor     = 'ew-resize';
+  document.body.style.userSelect = 'none';
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (_resizingSidebar) {
+    const w = Math.max(SIDEBAR_MIN, e.clientX);
+    sidebar.style.width = w + 'px';
+  }
+  if (_resizingToc) {
+    const w = Math.max(TOC_MIN, window.innerWidth - e.clientX);
+    tocPanel.style.width = w + 'px';
+  }
+  if (_sbDragging && activeTab) {
+    const pane       = activeTab.pane;
+    const trackH     = viewerScrollbar.clientHeight;
+    const thumbH     = viewerScrollbarThumb.offsetHeight;
+    const maxTravel  = trackH - thumbH;
+    if (maxTravel <= 0) return;
+    const dy         = e.clientY - _sbDragStartY;
+    const maxScroll  = pane.scrollHeight - pane.clientHeight;
+    pane.scrollTop   = _sbDragStartScroll + (dy / maxTravel) * maxScroll;
+  }
+  if (_nativeDrag) {
+    const dx = e.clientX - _nativeDrag.x;
+    const dy = e.clientY - _nativeDrag.y;
+    if (Math.sqrt(dx * dx + dy * dy) > 6) {
+      const fp = _nativeDrag.filePath;
+      _nativeDrag = null;
+      window.api.startDrag(fp);
+    }
+  }
+});
+
+document.addEventListener('mouseup', () => {
+  if (_resizingSidebar) {
+    _resizingSidebar = false;
+    sidebarResizeHandle.classList.remove('resizing');
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+  }
+  if (_resizingToc) {
+    _resizingToc = false;
+    tocResizeHandle.classList.remove('resizing');
+    tocPanel.classList.remove('resizing');
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+    _positionScrollbar();
+  }
+  _nativeDrag = null;
+  if (_sbDragging) {
+    _sbDragging = false;
+    viewerScrollbarThumb.classList.remove('dragging');
+    document.body.style.userSelect = '';
+  }
+});
 
 // ── Tab management ─────────────────────────────────────────────
 
 function createTab(filePath, pdfData) {
-  const id = Date.now();
+  const id = Date.now() + Math.random();
 
   const pane  = document.createElement('div');
   pane.className = 'viewer-pane';
   const pages = document.createElement('div');
   pages.className = 'pdf-pages';
   pane.appendChild(pages);
+
+  // Loading overlay — visible until _loadTabContent() completes
+  const loadingEl = document.createElement('div');
+  loadingEl.className = 'loading-overlay';
+  loadingEl.innerHTML = '<div class="spinner"></div>';
+  pane.appendChild(loadingEl);
+
   viewerHost.appendChild(pane);
 
   const viewer   = new PDFViewer(pages);
   const pdfBytes = pdfData instanceof Uint8Array ? pdfData.slice() : new Uint8Array(pdfData);
 
-  const state = {
-    id, filePath, pdfBytes, viewer,
-    annotator: null,
-    outline:   null,
-    pane,
-    dirty: false,
-    tabEl: null,
-  };
+  const state = { id, filePath, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
   tabs.push(state);
   return state;
 }
@@ -57,50 +247,206 @@ function renderTabBar() {
   tabBar.innerHTML = '';
   tabs.forEach(t => {
     const el = document.createElement('div');
-    el.className = 'tab' + (t === activeTab ? ' active' : '');
+    el.className = 'tab' + (t === activeTab ? ' active' : '') + (t.loadingEl || t.sleeping ? ' loading' : '');
     el.dataset.id = t.id;
+    el.draggable  = true;
 
     const name = document.createElement('span');
     name.className = 'tab-name';
     const basename = t.filePath ? t.filePath.split(/[\\/]/).pop() : 'Untitled';
     name.textContent = (t.dirty ? '*' : '') + basename;
+    name.title       = t.filePath || 'Untitled';
 
     const close = document.createElement('button');
     close.className = 'tab-close';
     close.textContent = '\u00d7';
     close.title = 'Close tab';
-    close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(t); });
+    close.addEventListener('click', (e) => { e.stopPropagation(); requestCloseTab(t); });
 
-    el.append(name, close);
+    // Native file drag handle — only for files that exist on disk
+    if (t.filePath && /[\\/]/.test(t.filePath)) {
+      const grip = document.createElement('span');
+      grip.className = 'tab-drag-grip';
+      grip.title     = t.dirty ? 'Drag file (save first for latest annotations)' : 'Drag file to another app';
+      grip.innerHTML = '<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">' +
+        '<circle cx="3" cy="2.5" r="1.2"/><circle cx="7" cy="2.5" r="1.2"/>' +
+        '<circle cx="3" cy="7"   r="1.2"/><circle cx="7" cy="7"   r="1.2"/>' +
+        '<circle cx="3" cy="11.5" r="1.2"/><circle cx="7" cy="11.5" r="1.2"/>' +
+        '</svg>';
+      if (t.dirty) grip.classList.add('dirty');
+      grip.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation(); // don't trigger tab switch or HTML5 drag
+        e.preventDefault();
+        _nativeDrag = { filePath: t.filePath, x: e.clientX, y: e.clientY };
+      });
+      el.append(grip, name, close);
+    } else {
+      el.append(name, close);
+    }
     el.addEventListener('click', () => switchTab(t));
-    tabBar.appendChild(el);
     t.tabEl = el;
+
+    // ── Same-window drag-to-reorder ────────────────────────────
+    el.addEventListener('dragstart', (e) => {
+      _draggedTab  = t;
+      _dropHandled = false;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('tab-id', String(t.id));
+      // Cross-window identification
+      e.dataTransfer.setData('pdfox-tab-filepath',  t.filePath || '');
+      e.dataTransfer.setData('pdfox-tab-source-id', String(myWindowId || ''));
+      e.dataTransfer.setData('pdfox-tab-dirty',     t.dirty ? '1' : '0');
+      setTimeout(() => el.style.opacity = '0.5', 0);
+    });
+
+    el.addEventListener('dragend', () => {
+      el.style.opacity = '';
+      const tab     = _draggedTab;
+      const handled = _dropHandled;
+      _draggedTab  = null;
+      _dropHandled = false;
+
+      if (!handled && tab && tab.filePath) {
+        // Schedule "open in new window" but allow the cross-window IPC signal to cancel it.
+        // The target window calls notifyTabTransferred after finishing its async file load,
+        // which triggers onCloseTabByFilepath here and clears this timer.
+        _newWindowTimer = setTimeout(async () => {
+          _newWindowTimer = null;
+          if (tabs.includes(tab) && tabs.length > 1) {
+            closeTab(tab);
+            await window.api.openNewWindow(tab.filePath);
+          }
+        }, 500);
+      }
+    });
+
+    el.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      el.classList.add('drag-over');
+    });
+    el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+
+    el.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation(); // don't bubble to tabBar cross-window handler
+      el.classList.remove('drag-over');
+      _dropHandled = true;
+
+      const srcId = Number(e.dataTransfer.getData('tab-id'));
+      if (!srcId) return; // cross-window drop without a tab-id — let it fall through
+      const srcTab = tabs.find(t2 => t2.id === srcId);
+      if (!srcTab || srcTab === t) return;
+      const srcIdx = tabs.indexOf(srcTab);
+      const dstIdx = tabs.indexOf(t);
+      tabs.splice(srcIdx, 1);
+      tabs.splice(dstIdx, 0, srcTab);
+      renderTabBar();
+    });
+
+    tabBar.appendChild(el);
   });
 }
+
+// ── Cross-window drag: tab bar as drop target ──────────────────
+
+tabBar.addEventListener('dragover', (e) => {
+  if (e.dataTransfer.types.includes('pdfox-tab-filepath')) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    tabBar.classList.add('drag-over-external');
+    // Bring this window to front the first time the drag enters
+    if (!_dragOverFocused) {
+      _dragOverFocused = true;
+      window.api.focusWindow();
+    }
+  }
+});
+tabBar.addEventListener('dragleave', (e) => {
+  if (!tabBar.contains(e.relatedTarget)) {
+    tabBar.classList.remove('drag-over-external');
+    _dragOverFocused = false;
+  }
+});
+tabBar.addEventListener('drop', async (e) => {
+  tabBar.classList.remove('drag-over-external');
+  const filepath = e.dataTransfer.getData('pdfox-tab-filepath');
+  const sourceId = Number(e.dataTransfer.getData('pdfox-tab-source-id'));
+  const isDirty  = e.dataTransfer.getData('pdfox-tab-dirty') === '1';
+  if (!filepath || sourceId === myWindowId) return; // same window handled by tab elements
+
+  e.preventDefault();
+  _dropHandled = true;
+
+  if (isDirty) {
+    const name = filepath.split(/[\\/]/).pop();
+    const ok = confirm(`"${name}" has unsaved annotations.\nMoving it to this window will discard them. Continue?`);
+    if (!ok) return;
+  }
+
+  const result = await window.api.openFileFromPath(filepath);
+  if (!result) return;
+
+  const tab = createTab(result.filePath, result.buffer);
+  renderTabBar();
+  switchTab(tab);
+
+  // Notify source window immediately — before loading — so its _newWindowTimer
+  // is cancelled well within the 500ms window, regardless of PDF load time.
+  await window.api.notifyTabTransferred(sourceId, filepath);
+
+  await _loadTabContent(tab);
+});
+
+// Close tab when another window accepted the drag
+window.api.onCloseTabByFilepath((filepath) => {
+  const tab = tabs.find(t => t.filePath === filepath);
+  if (!tab) return;
+  // Cancel the "open new window" fallback — the target window already accepted this tab.
+  if (_newWindowTimer !== null) { clearTimeout(_newWindowTimer); _newWindowTimer = null; }
+  closeTab(tab);
+  if (tabs.length === 0) window.close();
+});
+
+// ── Switch / close tab ─────────────────────────────────────────
 
 function switchTab(tab) {
   if (activeTab) activeTab.pane.classList.remove('active');
   activeTab = tab;
   tab.pane.classList.add('active');
+  tab.lastActive = Date.now();
   emptyState.style.display = 'none';
   renderTabBar();
 
+  if (tab.sleeping) {
+    _wakeTab(tab); // async; will update UI when done
+    return;
+  }
+
   if (tab.annotator) {
     thicknessInput.value = tab.annotator.thickness;
+    fontSizeInput.value  = tab.annotator.textFontSize;
     syncToolButtons(tab.annotator.tool);
     syncTextFormatButtons(tab.annotator);
   }
 
-  // Update color swatch selection to match current annotator color
   syncSwatches(tab.annotator?.color);
   renderToc(tab.outline);
   updatePageDisplay(tab);
   attachScrollListener(tab);
+  _positionScrollbar();
 }
 
 function closeTab(tab) {
   const idx = tabs.indexOf(tab);
   if (idx === -1) return;
+  // Remember for Ctrl+Shift+T (only real absolute paths, not virtual names like 'Combined.pdf')
+  if (tab.filePath && /[\\/]/.test(tab.filePath)) {
+    _closedTabStack.push({ filePath: tab.filePath });
+    if (_closedTabStack.length > 20) _closedTabStack.shift();
+  }
+  tab.annotator?.destroy();
   if (_paneScrollCleanup) { _paneScrollCleanup(); _paneScrollCleanup = null; }
   tab.pane.remove();
   tabs.splice(idx, 1);
@@ -122,39 +468,161 @@ function markDirty(tab) {
   renderTabBar();
 }
 
-// ── Open / Save ────────────────────────────────────────────────
+// ── Close prompt helpers ────────────────────────────────────────
 
-async function openFile() {
-  const result = await window.api.openFileDialog();
-  if (!result) return;
-  const { filePath, buffer } = result;
+function showCloseModal(ctx, message) {
+  _closeContext = ctx;
+  document.getElementById('close-modal-msg').textContent = message;
+  const discardBtn = document.getElementById('close-discard');
+  const saveBtn    = document.getElementById('close-save');
+  if (ctx.type === 'tab') {
+    discardBtn.textContent = 'Discard';
+    saveBtn.textContent    = ctx.tab.filePath ? 'Save' : 'Save As\u2026';
+  } else {
+    discardBtn.textContent = 'Discard All';
+    saveBtn.textContent    = 'Save All';
+  }
+  document.getElementById('close-modal').classList.remove('hidden');
+}
 
-  const tab = createTab(filePath, buffer);
-  await tab.viewer.load(tab.pdfBytes);
-  tab.annotator = new Annotator(tab.viewer.pages);
-  _patchAnnotatorForDirty(tab);
-  tab.outline = await tab.viewer.getOutline();
+// Use instead of closeTab() for user-initiated closes so dirty tabs get a prompt.
+function requestCloseTab(tab) {
+  if (!tab) return;
+  if (!tab.dirty) { closeTab(tab); return; }
+  const name = tab.filePath?.split(/[\\/]/).pop() || 'Untitled';
+  showCloseModal({ type: 'tab', tab }, `"${name}" has unsaved changes.`);
+}
 
-  switchTab(tab);
+// ── Sleeping tabs ───────────────────────────────────────────────
+
+const SLEEP_KEEP_RECENT = 3;           // always keep this many most-recent tabs awake
+const SLEEP_AFTER_MS    = 2 * 60_000; // sleep tabs inactive longer than this
+
+function _sleepTab(tab) {
+  if (tab.sleeping || tab === activeTab || !tab.annotator) return;
+  tab._savedScrollTop   = tab.pane.scrollTop;
+  tab._savedAnnotations = tab.annotator.annotations.slice();
+  tab.annotator.destroy();
+  tab.annotator = null;
+  tab.viewer.sleep();
+  tab.sleeping  = true;
   renderTabBar();
 }
 
+async function _wakeTab(tab) {
+  tab.sleeping = false;
+  const loadingEl = document.createElement('div');
+  loadingEl.className = 'loading-overlay';
+  loadingEl.innerHTML = '<div class="spinner"></div>';
+  tab.pane.appendChild(loadingEl);
+  tab.loadingEl = loadingEl;
+  renderTabBar();
+
+  await tab.viewer.load(tab.pdfBytes);
+  tab.annotator = new Annotator(tab.viewer.pages, tab.viewer);
+  _patchAnnotatorForDirty(tab);
+  if (tab._savedAnnotations?.length) {
+    tab.annotator.annotations = tab._savedAnnotations;
+    tab.annotator.redrawAll();
+    tab._savedAnnotations = null;
+  }
+  tab.outline = await tab.viewer.getOutline();
+  loadingEl.remove();
+  tab.loadingEl = null;
+
+  const savedScroll = tab._savedScrollTop || 0;
+  tab._savedScrollTop = null;
+  requestAnimationFrame(() => { tab.pane.scrollTop = savedScroll; });
+
+  renderTabBar();
+  if (activeTab === tab) {
+    thicknessInput.value = tab.annotator.thickness;
+    fontSizeInput.value  = tab.annotator.textFontSize;
+    syncToolButtons(tab.annotator.tool);
+    syncTextFormatButtons(tab.annotator);
+    syncSwatches(tab.annotator.color);
+    renderToc(tab.outline);
+    updatePageDisplay(tab);
+    attachScrollListener(tab);
+    _positionScrollbar();
+    _syncScrollbar();
+  }
+}
+
+function _sleepCheck() {
+  const now    = Date.now();
+  const sorted = [...tabs].sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+  sorted.forEach((tab, i) => {
+    if (tab.sleeping || tab === activeTab || !tab.annotator) return;
+    const tooOld = (now - (tab.lastActive || 0)) > SLEEP_AFTER_MS;
+    if (i >= SLEEP_KEEP_RECENT || tooOld) _sleepTab(tab);
+  });
+}
+
+setInterval(_sleepCheck, 15_000);
+
+// ── Tab content loader (async; shows spinner until done) ────────
+
+async function _loadTabContent(tab) {
+  try {
+    await tab.viewer.load(tab.pdfBytes);
+    tab.annotator = new Annotator(tab.viewer.pages, tab.viewer);
+    _patchAnnotatorForDirty(tab);
+    tab.outline = await tab.viewer.getOutline();
+  } catch (err) {
+    const name = tab.filePath ? tab.filePath.split(/[\\/]/).pop() : 'file';
+    alert(`Could not open "${name}": ${err.message}`);
+    closeTab(tab);
+    return;
+  }
+  if (tab.loadingEl) { tab.loadingEl.remove(); tab.loadingEl = null; }
+  tab.lastActive = Date.now(); // reset clock so freshly-loaded tabs don't immediately sleep
+  renderTabBar();
+  if (activeTab === tab) {
+    syncToolButtons(tab.annotator.tool);
+    syncTextFormatButtons(tab.annotator);
+    syncSwatches(tab.annotator.color);
+    renderToc(tab.outline);
+    updatePageDisplay(tab);
+    _syncScrollbar();
+  }
+}
+
+// ── Open / Save ────────────────────────────────────────────────
+
+async function openFile() {
+  const results = await window.api.openFileDialog();
+  if (!results || results.length === 0) return;
+
+  // Create all tabs immediately so they appear in the sidebar straight away
+  const newTabs = results.map(({ filePath, buffer }) => createTab(filePath, buffer));
+  renderTabBar();
+  switchTab(newTabs[newTabs.length - 1]);
+
+  // Load the active (last-selected) tab first, then the rest in order
+  const activeNew = newTabs[newTabs.length - 1];
+  for (const tab of [activeNew, ...newTabs.slice(0, -1)]) {
+    await _loadTabContent(tab);
+  }
+}
+
 async function saveTab(tab) {
-  if (!tab) return;
+  if (!tab) return false;
   const bytes = await embedAnnotations(tab.pdfBytes, tab.annotator.annotations, tab.viewer);
   const res   = await window.api.saveFile(tab.filePath, bytes.buffer);
   if (res.ok) {
     tab.pdfBytes = bytes;
     tab.dirty    = false;
     renderTabBar();
+    return true;
   } else if (res.error && res.error !== 'cancelled') {
     alert('Save failed: ' + res.error);
   }
+  return false;
 }
 
-// Save Copy: writes to a new path but updates the current tab (no new tab opened)
 async function saveTabCopy(tab) {
-  if (!tab) return;
+  if (!tab) return false;
   const bytes = await embedAnnotations(tab.pdfBytes, tab.annotator.annotations, tab.viewer);
   const res   = await window.api.saveFileCopy(bytes.buffer);
   if (res.ok) {
@@ -162,7 +630,20 @@ async function saveTabCopy(tab) {
     tab.pdfBytes = bytes;
     tab.dirty    = false;
     renderTabBar();
+    return true;
   }
+  return false;
+}
+
+async function reopenLastTab() {
+  if (_closedTabStack.length === 0) return;
+  const { filePath } = _closedTabStack.pop();
+  const result = await window.api.openFileFromPath(filePath);
+  if (!result) { alert(`Could not reopen "${filePath.split(/[\\/]/).pop()}": file not found.`); return; }
+  const tab = createTab(result.filePath, result.buffer);
+  renderTabBar();
+  switchTab(tab);
+  await _loadTabContent(tab);
 }
 
 function _patchAnnotatorForDirty(tab) {
@@ -179,32 +660,63 @@ function _patchAnnotatorForDirty(tab) {
 
 // ── Zoom ───────────────────────────────────────────────────────
 
-async function zoom(delta) {
+// Immediately apply a CSS scale transform to the page container for visual
+// feedback, then re-render at the true scale after a 250 ms debounce.
+function zoom(delta) {
   if (!activeTab) return;
+  const v        = activeTab.viewer;
+  const newScale = Math.max(0.25, Math.min(5,
+    Math.round(((_zoomTarget ?? v.scale) + delta) * 100) / 100));
+  _zoomTarget = newScale;
+
+  // Instant visual feedback via CSS transform (GPU-accelerated, zero render cost)
+  const pagesEl = activeTab.pane.querySelector('.pdf-pages');
+  if (pagesEl) {
+    const ratio = newScale / v.scale;
+    pagesEl.style.transformOrigin = 'top center';
+    pagesEl.style.transform       = `scale(${ratio})`;
+  }
+
+  // Debounce: wait until the user stops zooming, then do the real re-render
+  clearTimeout(_zoomTimer);
+  _zoomTimer = setTimeout(async () => {
+    const scale = _zoomTarget;
+    _zoomTimer  = null;
+    _zoomTarget = null;
+    await _applyZoomNow(scale);
+  }, 250);
+}
+
+// Cancel any pending debounce, remove the CSS transform, and synchronously
+// run the full re-render at the given scale. Used by fitWidth/fitHeight/Ctrl+R.
+async function _applyZoomNow(scale) {
+  if (!activeTab) return;
+  clearTimeout(_zoomTimer);
+  _zoomTimer  = null;
+  _zoomTarget = null;
+
+  const pagesEl = activeTab.pane.querySelector('.pdf-pages');
+  if (pagesEl) pagesEl.style.transform = '';
+
   const v = activeTab.viewer;
-  await v.setZoom(Math.round((v.scale + delta) * 100) / 100);
+  await v.setZoom(scale);
   activeTab.annotator.pages = v.pages;
   activeTab.annotator.redrawAll();
+  _syncScrollbar();
 }
 
 async function fitWidth() {
   if (!activeTab) return;
-  const v    = activeTab.viewer;
-  const vp   = await v.getViewport(1);
-  const containerW = activeTab.pane.clientWidth - 32;
-  await v.setZoom(containerW / (vp.width / v.scale));
-  activeTab.annotator.pages = v.pages;
-  activeTab.annotator.redrawAll();
+  const v  = activeTab.viewer;
+  const vp = await v.getViewport(1);
+  await _applyZoomNow(Math.round(((activeTab.pane.clientWidth - 32) / (vp.width / v.scale)) * 100) / 100);
 }
 
 async function fitHeight() {
   if (!activeTab) return;
-  const v    = activeTab.viewer;
-  const vp   = await v.getViewport(activeTab.viewer.getVisiblePageNum());
-  const containerH = activeTab.pane.clientHeight - 32;
-  await v.setZoom(containerH / (vp.height / v.scale));
-  activeTab.annotator.pages = v.pages;
-  activeTab.annotator.redrawAll();
+  const v  = activeTab.viewer;
+  const vp = await v.getViewport(v.getVisiblePageNum());
+  await _applyZoomNow(Math.round(((activeTab.pane.clientHeight - 32) / (vp.height / v.scale)) * 100) / 100);
 }
 
 // ── Rotate ─────────────────────────────────────────────────────
@@ -212,33 +724,29 @@ async function fitHeight() {
 async function rotate(singlePage) {
   if (!activeTab) return;
   const v = activeTab.viewer;
-  if (singlePage) {
-    await v.rotatePage(v.getVisiblePageNum(), 90);
-  } else {
-    await v.rotateAll(90);
-  }
+  if (singlePage) await v.rotatePage(v.getVisiblePageNum(), 90);
+  else            await v.rotateAll(90);
   activeTab.annotator.pages = v.pages;
   activeTab.annotator.redrawAll();
+  markDirty(activeTab);
 }
 
 // ── Page navigation ─────────────────────────────────────────────
 
 function updatePageDisplay(tab) {
   if (!tab?.viewer) {
-    pageInput.value  = 1;
+    pageInput.value       = 1;
     pageTotal.textContent = '/ 1';
     return;
   }
-  const count  = tab.viewer.pageCount;
-  const pageNum = tab.viewer.getVisiblePageNum();
-  pageInput.max        = count;
-  pageInput.value      = pageNum;
-  pageTotal.textContent = `/ ${count}`;
+  pageInput.max         = tab.viewer.pageCount;
+  pageInput.value       = tab.viewer.getVisiblePageNum();
+  pageTotal.textContent = `/ ${tab.viewer.pageCount}`;
 }
 
 function attachScrollListener(tab) {
   if (_paneScrollCleanup) _paneScrollCleanup();
-  const handler = () => updatePageDisplay(tab);
+  const handler = () => { updatePageDisplay(tab); _syncScrollbar(); };
   tab.pane.addEventListener('scroll', handler, { passive: true });
   _paneScrollCleanup = () => tab.pane.removeEventListener('scroll', handler);
 }
@@ -256,11 +764,12 @@ function renderToc(outline) {
   tocTree.innerHTML = '';
   if (!outline || outline.length === 0) {
     tocPanel.classList.add('hidden');
+    _positionScrollbar();
     return;
   }
   tocPanel.classList.remove('hidden');
-  tocPanel.classList.remove('collapsed');
   _buildTocNodes(outline, tocTree);
+  _positionScrollbar();
 }
 
 function _buildTocNodes(items, container) {
@@ -268,12 +777,11 @@ function _buildTocNodes(items, container) {
     const hasChildren = item.items && item.items.length > 0;
     const node = document.createElement('div');
 
-    // Build collapsible children container first (needed in closure)
     let childrenEl = null;
     if (hasChildren) {
       childrenEl = document.createElement('div');
       childrenEl.className = 'toc-children';
-      childrenEl.hidden    = true; // collapsed by default
+      childrenEl.hidden    = true;
       _buildTocNodes(item.items, childrenEl);
     }
 
@@ -282,12 +790,12 @@ function _buildTocNodes(items, container) {
 
     const chevron = document.createElement('span');
     chevron.className   = 'toc-chevron';
-    chevron.textContent = hasChildren ? '\u25B6' : '\u00a0'; // ▶ or nbsp
+    chevron.textContent = hasChildren ? '\u25B6' : '\u00a0';
     if (hasChildren) {
       chevron.addEventListener('click', (e) => {
         e.stopPropagation();
         childrenEl.hidden   = !childrenEl.hidden;
-        chevron.textContent = childrenEl.hidden ? '\u25B6' : '\u25BC'; // ▶ / ▼
+        chevron.textContent = childrenEl.hidden ? '\u25B6' : '\u25BC';
       });
     }
 
@@ -312,9 +820,7 @@ async function _navigateToOutlineItem(item) {
   }
 }
 
-tocToggle.addEventListener('click', () => tocPanel.classList.toggle('collapsed'));
-
-// ── Toolbar ────────────────────────────────────────────────────
+// ── Toolbar sync helpers ───────────────────────────────────────
 
 function syncToolButtons(tool) {
   document.querySelectorAll('.tool-btn').forEach(btn => {
@@ -328,10 +834,14 @@ function syncTextFormatButtons(annotator) {
 }
 
 function syncSwatches(color) {
+  if (!color) return;
   document.querySelectorAll('.swatch').forEach(s => {
     s.classList.toggle('active', s.dataset.color === color);
   });
+  colorDot.style.background = color;
 }
+
+// ── Toolbar event wiring ───────────────────────────────────────
 
 document.querySelectorAll('.tool-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -346,10 +856,10 @@ document.querySelectorAll('.swatch').forEach(s => {
     const color = s.dataset.color;
     if (activeTab?.annotator) activeTab.annotator.setColor(color);
     syncSwatches(color);
+    colorPanel.classList.add('hidden');
   });
 });
 
-document.getElementById('btn-open').addEventListener('click', openFile);
 document.getElementById('btn-undo').addEventListener('click',   () => activeTab?.annotator?.undo());
 document.getElementById('btn-redo').addEventListener('click',   () => activeTab?.annotator?.redo());
 document.getElementById('btn-fit').addEventListener('click',    fitWidth);
@@ -371,20 +881,20 @@ btnUnderline.addEventListener('click', () => {
   btnUnderline.classList.toggle('active', next);
 });
 
+fontSizeInput.addEventListener('change', () => {
+  if (activeTab?.annotator) activeTab.annotator.setTextFontSize(Number(fontSizeInput.value));
+});
+
 thicknessInput.addEventListener('input', () => {
   if (activeTab?.annotator) activeTab.annotator.setThickness(Number(thicknessInput.value));
 });
 
 document.getElementById('btn-prev-page').addEventListener('click', () => {
-  if (!activeTab) return;
-  jumpToPage(activeTab.viewer.getVisiblePageNum() - 1);
+  if (activeTab) jumpToPage(activeTab.viewer.getVisiblePageNum() - 1);
 });
-
 document.getElementById('btn-next-page').addEventListener('click', () => {
-  if (!activeTab) return;
-  jumpToPage(activeTab.viewer.getVisiblePageNum() + 1);
+  if (activeTab) jumpToPage(activeTab.viewer.getVisiblePageNum() + 1);
 });
-
 pageInput.addEventListener('change', () => jumpToPage(Number(pageInput.value)));
 
 // ── Ctrl+scroll zoom ───────────────────────────────────────────
@@ -399,23 +909,24 @@ viewerHost.addEventListener('wheel', (e) => {
 
 document.addEventListener('keydown', async (e) => {
   const ctrl = e.ctrlKey || e.metaKey;
-
   if (ctrl && e.key === 'o') { e.preventDefault(); openFile(); return; }
   if (ctrl && e.shiftKey && e.key === 'S') { e.preventDefault(); saveTabCopy(activeTab); return; }
   if (ctrl && e.key === 's') { e.preventDefault(); saveTab(activeTab); return; }
-  if (ctrl && e.key === 'w') { e.preventDefault(); closeTab(activeTab); return; }
+  if (ctrl && e.key === 'w') { e.preventDefault(); requestCloseTab(activeTab); return; }
+  if (ctrl && e.shiftKey && e.key === 'T') { e.preventDefault(); reopenLastTab(); return; }
   if (ctrl && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoom(0.1); return; }
   if (ctrl && e.key === '-') { e.preventDefault(); zoom(-0.1); return; }
   if (ctrl && e.key === '0') { e.preventDefault(); fitWidth(); return; }
   if (ctrl && e.key === 'z') { e.preventDefault(); activeTab?.annotator?.undo(); return; }
   if (ctrl && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) { e.preventDefault(); activeTab?.annotator?.redo(); return; }
   if (ctrl && e.key === 'p') { e.preventDefault(); window.print(); return; }
+  if (ctrl && e.key === 'r') { e.preventDefault(); if (activeTab) _applyZoomNow(activeTab.viewer.scale); return; }
 
   if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
 
   const toolMap = {
     d: 'draw', h: 'highlight', t: 'text', Escape: 'select',
-    l: 'line',  r: 'rect', o: 'oval', a: 'arrow', e: 'eraser',
+    l: 'line', r: 'rect', o: 'oval', a: 'arrow', e: 'eraser',
   };
   const tool = toolMap[e.key];
   if (tool) {
@@ -431,10 +942,221 @@ window.api.onMenuEvent((event) => {
     case 'menu-open':       openFile(); break;
     case 'menu-save':       saveTab(activeTab); break;
     case 'menu-save-copy':  saveTabCopy(activeTab); break;
-    case 'menu-close-tab':  if (activeTab) closeTab(activeTab); break;
+    case 'menu-close-tab':   if (activeTab) requestCloseTab(activeTab); break;
+    case 'menu-reopen-tab':  reopenLastTab(); break;
+  }
+});
+
+// Receive file data when this window was opened for a dragged-out tab
+window.api.onOpenFileData(async ({ filePath, buffer }) => {
+  const tab = createTab(filePath, buffer);
+  renderTabBar();
+  switchTab(tab);
+  await _loadTabContent(tab);
+});
+
+// ── Combine PDFs ───────────────────────────────────────────────
+
+let _combineOrder = [];
+
+document.getElementById('btn-combine').addEventListener('click', () => {
+  if (tabs.length < 2) { alert('Open at least 2 PDF files to combine.'); return; }
+  _openCombineModal();
+});
+document.getElementById('combine-cancel').addEventListener('click', () => {
+  document.getElementById('combine-modal').classList.add('hidden');
+});
+document.getElementById('combine-ok').addEventListener('click', _executeCombine);
+
+function _openCombineModal() {
+  _combineOrder = [];
+  const list = document.getElementById('combine-list');
+  list.innerHTML = '';
+  tabs.forEach((tab, i) => {
+    const item  = document.createElement('div');
+    item.className   = 'combine-item';
+    item.dataset.tabIdx = i;
+    const badge  = document.createElement('span');
+    badge.className  = 'combine-order';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'combine-name';
+    nameEl.textContent = tab.filePath ? tab.filePath.split(/[\\/]/).pop() : 'Untitled';
+    item.append(badge, nameEl);
+    item.addEventListener('click', () => {
+      const pos = _combineOrder.indexOf(tab);
+      if (pos >= 0) { _combineOrder.splice(pos, 1); item.classList.remove('selected'); }
+      else          { _combineOrder.push(tab);        item.classList.add('selected'); }
+      _refreshCombineBadges(list);
+    });
+    list.appendChild(item);
+  });
+  document.getElementById('combine-modal').classList.remove('hidden');
+}
+
+function _refreshCombineBadges(list) {
+  list.querySelectorAll('.combine-item').forEach((item) => {
+    const tab   = tabs[Number(item.dataset.tabIdx)];
+    const badge = item.querySelector('.combine-order');
+    const pos   = _combineOrder.indexOf(tab);
+    badge.textContent = pos >= 0 ? String(pos + 1) : '';
+  });
+}
+
+async function _executeCombine() {
+  if (_combineOrder.length < 2) { alert('Select at least 2 documents.'); return; }
+  document.getElementById('combine-modal').classList.add('hidden');
+  const resultDoc = await PDFDocument.create();
+  for (const tab of _combineOrder) {
+    const srcDoc = await PDFDocument.load(tab.pdfBytes, { ignoreEncryption: true });
+    const copied = await resultDoc.copyPages(srcDoc, srcDoc.getPageIndices());
+    copied.forEach(p => resultDoc.addPage(p));
+  }
+  const bytes = await resultDoc.save();
+  const tab   = createTab('Combined.pdf', bytes);
+  renderTabBar();
+  switchTab(tab);
+  await _loadTabContent(tab);
+  markDirty(tab);
+}
+
+// ── Reorder Pages ──────────────────────────────────────────────
+
+document.getElementById('btn-reorder').addEventListener('click', _openReorderModal);
+document.getElementById('reorder-cancel').addEventListener('click', () => {
+  document.getElementById('reorder-modal').classList.add('hidden');
+});
+document.getElementById('reorder-ok').addEventListener('click', _executeReorder);
+
+async function _openReorderModal() {
+  if (!activeTab) return;
+  const tab     = activeTab;
+  const count   = tab.viewer.pageCount;
+  const container = document.getElementById('reorder-pages');
+
+  container.innerHTML = '<p style="color:#888;font-size:13px;padding:8px">Loading thumbnails…</p>';
+  document.getElementById('reorder-modal').classList.remove('hidden');
+
+  container.innerHTML = '';
+  for (let i = 0; i < count; i++) {
+    const dataUrl = await tab.viewer.renderThumbnail(i + 1);
+    const thumb   = document.createElement('div');
+    thumb.className  = 'reorder-thumb';
+    thumb.draggable  = true;
+    thumb.dataset.orig = i;
+
+    const img = document.createElement('img');
+    img.src   = dataUrl;
+    img.alt   = `Page ${i + 1}`;
+    const num = document.createElement('span');
+    num.className   = 'reorder-page-num';
+    num.textContent = `Page ${i + 1}`;
+    thumb.append(img, num);
+
+    thumb.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('reorder-orig', String(thumb.dataset.orig));
+      e.dataTransfer.effectAllowed = 'move';
+      thumb.classList.add('dragging');
+    });
+    thumb.addEventListener('dragend',  () => thumb.classList.remove('dragging'));
+    thumb.addEventListener('dragover', (e) => { e.preventDefault(); thumb.classList.add('drag-over-r'); });
+    thumb.addEventListener('dragleave', () => thumb.classList.remove('drag-over-r'));
+    thumb.addEventListener('drop', (e) => {
+      e.preventDefault();
+      thumb.classList.remove('drag-over-r');
+      const srcOrig = e.dataTransfer.getData('reorder-orig');
+      const dstOrig = thumb.dataset.orig;
+      if (srcOrig === dstOrig) return;
+
+      const srcEl = container.querySelector(`[data-orig="${srcOrig}"]`);
+      if (!srcEl) return;
+
+      const children = [...container.children];
+      const srcIdx   = children.indexOf(srcEl);
+      const dstIdx   = children.indexOf(thumb);
+      srcIdx < dstIdx
+        ? thumb.insertAdjacentElement('afterend', srcEl)
+        : thumb.insertAdjacentElement('beforebegin', srcEl);
+
+      container.querySelectorAll('.reorder-page-num').forEach((span, idx) => {
+        span.textContent = `Page ${idx + 1}`;
+      });
+    });
+
+    container.appendChild(thumb);
+  }
+}
+
+async function _executeReorder() {
+  if (!activeTab) return;
+  document.getElementById('reorder-modal').classList.add('hidden');
+
+  const container = document.getElementById('reorder-pages');
+  const newOrder  = [...container.querySelectorAll('.reorder-thumb')].map(el => Number(el.dataset.orig));
+  if (newOrder.every((v, i) => v === i)) return; // unchanged
+
+  const tab = activeTab;
+  const srcDoc    = await PDFDocument.load(tab.pdfBytes, { ignoreEncryption: true });
+  const resultDoc = await PDFDocument.create();
+  const pages     = await resultDoc.copyPages(srcDoc, newOrder);
+  pages.forEach(p => resultDoc.addPage(p));
+  const bytes = await resultDoc.save();
+
+  tab.pdfBytes = bytes;
+  tab.annotator.clear();
+  // Re-add loading overlay for the re-render
+  const reloadEl = document.createElement('div');
+  reloadEl.className = 'loading-overlay';
+  reloadEl.innerHTML = '<div class="spinner"></div>';
+  tab.pane.appendChild(reloadEl);
+  tab.loadingEl = reloadEl;
+  await _loadTabContent(tab);
+  markDirty(tab);
+}
+
+// ── Before-close: unsaved-changes dialog ───────────────────────
+
+window.api.onBeforeClose(async () => {
+  const dirtyTabs = tabs.filter(t => t.dirty);
+  if (dirtyTabs.length === 0) { await window.api.forceClose(); return; }
+  const msg = dirtyTabs.length === 1
+    ? `"${dirtyTabs[0].filePath?.split(/[\\/]/).pop() || 'Untitled'}" has unsaved changes.`
+    : `${dirtyTabs.length} files have unsaved changes.`;
+  showCloseModal({ type: 'window' }, msg);
+});
+
+document.getElementById('close-cancel').addEventListener('click', () => {
+  document.getElementById('close-modal').classList.add('hidden');
+  _closeContext = null;
+});
+
+document.getElementById('close-discard').addEventListener('click', async () => {
+  document.getElementById('close-modal').classList.add('hidden');
+  const ctx = _closeContext;
+  _closeContext = null;
+  if (ctx?.type === 'tab') closeTab(ctx.tab);
+  else                     await window.api.forceClose();
+});
+
+document.getElementById('close-save').addEventListener('click', async () => {
+  document.getElementById('close-modal').classList.add('hidden');
+  const ctx = _closeContext;
+  _closeContext = null;
+  if (ctx?.type === 'tab') {
+    const ok = ctx.tab.filePath ? await saveTab(ctx.tab) : await saveTabCopy(ctx.tab);
+    if (ok) closeTab(ctx.tab);
+  } else {
+    for (const tab of tabs.filter(t => t.dirty)) {
+      const ok = tab.filePath ? await saveTab(tab) : await saveTabCopy(tab);
+      if (!ok) return; // user cancelled a dialog — abort close
+    }
+    await window.api.forceClose();
   }
 });
 
 // ── Init ───────────────────────────────────────────────────────
+
+// Sync colour dot to initial active swatch
+const initSwatch = document.querySelector('.swatch[data-color="#f5c518"]');
+if (initSwatch) colorDot.style.background = initSwatch.dataset.color;
 
 emptyState.style.display = '';
