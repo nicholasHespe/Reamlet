@@ -3,14 +3,14 @@
 
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage } = require('electron');
 const path = require('path');
-const fs = require('fs');
+const fs   = require('fs');
 
-let mainWindow;
+// ── Window factory ─────────────────────────────────────────────
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
+function createWindow(openFilePath) {
+  const win = new BrowserWindow({
     width: 1280,
     height: 900,
     minWidth: 640,
@@ -24,36 +24,41 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  buildMenu();
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  // Ask renderer to handle the close so it can prompt for unsaved changes
+  win.on('close', (e) => {
+    e.preventDefault();
+    win.webContents.send('before-close');
+  });
+
+  if (openFilePath) {
+    win.webContents.once('did-finish-load', () => {
+      try {
+        const buffer = fs.readFileSync(openFilePath);
+        win.webContents.send('open-file-data', {
+          filePath: openFilePath,
+          buffer:   buffer.buffer,
+        });
+      } catch (_) { /* ignore */ }
+    });
+  }
+
+  return win;
 }
 
 function buildMenu() {
+  const fw = () => BrowserWindow.getFocusedWindow();
   const template = [
     {
       label: 'File',
       submenu: [
-        {
-          label: 'Open…',
-          accelerator: 'CmdOrCtrl+O',
-          click: () => mainWindow.webContents.send('menu-open'),
-        },
-        {
-          label: 'Save',
-          accelerator: 'CmdOrCtrl+S',
-          click: () => mainWindow.webContents.send('menu-save'),
-        },
-        {
-          label: 'Save Copy…',
-          accelerator: 'CmdOrCtrl+Shift+S',
-          click: () => mainWindow.webContents.send('menu-save-copy'),
-        },
+        { label: 'Open…',       accelerator: 'CmdOrCtrl+O',       click: () => fw()?.webContents.send('menu-open') },
+        { label: 'Save',        accelerator: 'CmdOrCtrl+S',       click: () => fw()?.webContents.send('menu-save') },
+        { label: 'Save Copy…',  accelerator: 'CmdOrCtrl+Shift+S', click: () => fw()?.webContents.send('menu-save-copy') },
         { type: 'separator' },
-        {
-          label: 'Close Tab',
-          accelerator: 'CmdOrCtrl+W',
-          click: () => mainWindow.webContents.send('menu-close-tab'),
-        },
+        { label: 'Close Tab',       accelerator: 'CmdOrCtrl+W',           click: () => fw()?.webContents.send('menu-close-tab') },
+        { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T',  click: () => fw()?.webContents.send('menu-reopen-tab') },
         { type: 'separator' },
         { role: 'quit' },
       ],
@@ -66,35 +71,44 @@ function buildMenu() {
       ],
     },
   ];
-
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// IPC: open file dialog, return { filePath, buffer }
-ipcMain.handle('open-file-dialog', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Open PDF',
-    filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
-    properties: ['openFile'],
+// ── Drag icon (created once, reused for all native file drags) ──
+
+let _dragIcon = null;
+function getDragIcon() {
+  if (_dragIcon) return _dragIcon;
+  // 32×32 RGBA buffer — semi-transparent light grey square, good enough for a drag cursor
+  const buf = Buffer.alloc(32 * 32 * 4, 180);
+  _dragIcon = nativeImage.createFromBuffer(buf, { width: 32, height: 32 });
+  return _dragIcon;
+}
+
+// ── IPC handlers ───────────────────────────────────────────────
+
+ipcMain.handle('open-file-dialog', async (event) => {
+  const win    = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
+    title:      'Open PDF',
+    filters:    [{ name: 'PDF Files', extensions: ['pdf'] }],
+    properties: ['openFile', 'multiSelections'],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
-  const filePath = result.filePaths[0];
-  // Buffer.from() creates a standalone copy (not a shared pool view)
-  // Electron IPC serialises Node Buffer → Uint8Array in the renderer
-  const buffer = Buffer.from(fs.readFileSync(filePath));
-  return { filePath, buffer };
+  return result.filePaths.map(filePath => ({
+    filePath,
+    buffer: Buffer.from(fs.readFileSync(filePath)),
+  }));
 });
 
-// IPC: overwrite original file — asks for confirmation first
-ipcMain.handle('save-file', async (_event, filePath, arrayBuffer) => {
-  const { response } = await dialog.showMessageBox(mainWindow, {
-    type:      'question',
-    buttons:   ['Replace', 'Cancel'],
-    defaultId: 0,
-    cancelId:  1,
-    title:     'Save',
-    message:   `Replace "${path.basename(filePath)}"?`,
-    detail:    'The existing file will be overwritten with your annotated version.',
+ipcMain.handle('save-file', async (event, filePath, arrayBuffer) => {
+  if (!filePath) return { ok: false, error: 'no file path' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question', buttons: ['Replace', 'Cancel'],
+    defaultId: 0, cancelId: 1,
+    title: 'Save', message: `Replace "${path.basename(filePath)}"?`,
+    detail: 'The existing file will be overwritten with your annotated version.',
   });
   if (response !== 0) return { ok: false, error: 'cancelled' };
   try {
@@ -105,11 +119,10 @@ ipcMain.handle('save-file', async (_event, filePath, arrayBuffer) => {
   }
 });
 
-// IPC: save to a new path chosen by the user
-ipcMain.handle('save-file-copy', async (_event, arrayBuffer) => {
-  const result = await dialog.showSaveDialog(mainWindow, {
-    title: 'Save Copy',
-    filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
+ipcMain.handle('save-file-copy', async (event, arrayBuffer) => {
+  const win    = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showSaveDialog(win, {
+    title: 'Save Copy', filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
   });
   if (result.canceled || !result.filePath) return { ok: false };
   try {
@@ -120,7 +133,59 @@ ipcMain.handle('save-file-copy', async (_event, arrayBuffer) => {
   }
 });
 
-app.whenReady().then(createWindow);
+// Open a new PDFox window, optionally pre-loading a file
+ipcMain.handle('open-new-window', (_event, filePath) => {
+  createWindow(filePath || null);
+  return { ok: true };
+});
+
+// Return the BrowserWindow ID so the renderer can tag its drags
+ipcMain.handle('get-window-id', (event) => {
+  return BrowserWindow.fromWebContents(event.sender)?.id ?? null;
+});
+
+// Read a file from disk and return its buffer (used for cross-window tab drops)
+ipcMain.handle('open-file-from-path', (_event, filePath) => {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    return { filePath, buffer: Buffer.from(buffer) };
+  } catch (_) {
+    return null;
+  }
+});
+
+// Bring this window to the front (called when an external drag hovers over it)
+ipcMain.handle('focus-window', (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.focus();
+  return { ok: true };
+});
+
+// Destroy window unconditionally (after renderer confirms close is OK)
+ipcMain.handle('force-close', (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.destroy();
+  return { ok: true };
+});
+
+// Tell the source window to close the tab that was dragged into another window
+ipcMain.handle('notify-tab-transferred', (_event, sourceWindowId, filePath) => {
+  const win = BrowserWindow.fromId(sourceWindowId);
+  if (win) win.webContents.send('close-tab-by-filepath', filePath);
+  return { ok: true };
+});
+
+// Initiate a native OS file drag so external apps (Outlook, Explorer, etc.) can receive the file.
+// Must be ipcMain.on (synchronous) — startDrag() must be called in the same tick as the IPC event.
+ipcMain.on('start-drag', (event, filePath) => {
+  if (!filePath || !fs.existsSync(filePath)) return;
+  event.sender.startDrag({ file: filePath, icon: getDragIcon() });
+});
+
+// ── App lifecycle ──────────────────────────────────────────────
+
+app.whenReady().then(() => {
+  createWindow();
+  buildMenu();
+});
 
 app.on('window-all-closed', () => {
   app.quit();
