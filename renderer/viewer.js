@@ -176,14 +176,14 @@ export class PDFViewer {
   }
 
   // Render a page thumbnail at a small scale; returns a data URL (JPEG)
-  async renderThumbnail(pageNum, scale = 0.18) {
+  async renderThumbnail(pageNum, scale = 0.4) {
     const page     = await this.pdfDoc.getPage(pageNum);
     const viewport = page.getViewport({ scale });
     const canvas   = document.createElement('canvas');
     canvas.width   = viewport.width;
     canvas.height  = viewport.height;
     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-    return canvas.toDataURL('image/jpeg', 0.75);
+    return canvas.toDataURL('image/jpeg', 0.92);
   }
 
   // Release all PDF.js resources and clear rendered canvases.
@@ -253,6 +253,7 @@ export class PDFViewer {
     if (this.pages[idx]) {
       // Re-use existing DOM elements on zoom/rotate
       ({ wrapper, canvas, textDiv, annotCanvas, formLayer } = this.pages[idx]);
+      this.pages[idx].viewportTransform = viewport.transform;
     } else {
       wrapper     = document.createElement('div');
       canvas      = document.createElement('canvas');
@@ -269,7 +270,7 @@ export class PDFViewer {
       wrapper.dataset.page = pageNum;
       wrapper.append(canvas, textDiv, annotCanvas, formLayer);
       this.container.appendChild(wrapper);
-      this.pages[idx] = { wrapper, canvas, textDiv, annotCanvas, formLayer };
+      this.pages[idx] = { wrapper, canvas, textDiv, annotCanvas, formLayer, viewportTransform: viewport.transform };
     }
 
     // Resize wrapper and canvases to match viewport
