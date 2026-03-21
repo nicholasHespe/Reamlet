@@ -1,8 +1,33 @@
 // PDFox — annotation layer
 // Manages canvas overlays per page and stores annotation objects in memory.
 // SPDX-License-Identifier: GPL-3.0-or-later
+// @ts-nocheck — types to be added incrementally
 
 export class Annotator {
+  pages: any[];
+  viewer: any;
+  annotations: any[];
+  tool: string;
+  color: string;
+  thickness: number;
+  textBold: boolean;
+  textUnderline: boolean;
+  textFontSize: number;
+  _drawing: boolean;
+  _currentPath: any;
+  _shapeStart: any;
+  _freehighlight: any;
+  _erasing: boolean;
+  _erasedAny: boolean;
+  _selectedIdx: any;
+  _selectedPageNum: any;
+  _dragStart: any;
+  _dragOrigAnn: any;
+  _dragPageRect: any;
+  _history: string[];
+  _histIdx: number;
+  _handlers: Record<string, any>;
+
   /**
    * @param {Object[]} pages  - viewer.pages array (each has annotCanvas, wrapper)
    * @param {PDFViewer} viewer - needed for font size in text tool (optional)
@@ -13,7 +38,7 @@ export class Annotator {
 
     this.annotations = [];
     this.tool        = 'select';
-    this.color       = '#f5c518';
+    this.color       = '#ff3333';
     this.thickness   = 3;
     this.textBold      = false;
     this.textUnderline = false;
@@ -336,28 +361,31 @@ export class Annotator {
       }
     };
 
-    // Freehand highlight: draw stroke as mouse moves
+    // Freehand highlight: draw stroke as mouse moves.
+    // Redraw the whole page + full path each frame so round caps at segment
+    // joints don't stack alpha (a single stroke never compounds with itself).
     const onWrapperMove = (e) => {
       if (!this._freehighlight || this._freehighlight.pageNum !== pageNum) return;
       const rect = wrapper.getBoundingClientRect();
       const nx = (e.clientX - rect.left) / rect.width;
       const ny = (e.clientY - rect.top)  / rect.height;
       const fh = this._freehighlight;
-      const prev = fh.points[fh.points.length - 1];
       fh.points.push([nx, ny]);
 
+      this._redrawPage(p, pageNum);
       const cvs = p.annotCanvas;
       const ctx = cvs.getContext('2d');
       const w = cvs.width, h = cvs.height;
       ctx.save();
-      ctx.globalAlpha  = 0.35;
-      ctx.strokeStyle  = this.color;
-      ctx.lineWidth    = 20;
-      ctx.lineCap      = 'round';
-      ctx.lineJoin     = 'round';
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = this.color;
+      ctx.lineWidth   = 20;
+      ctx.lineCap     = 'round';
+      ctx.lineJoin    = 'round';
       ctx.beginPath();
-      ctx.moveTo(prev[0] * w, prev[1] * h);
-      ctx.lineTo(nx * w, ny * h);
+      fh.points.forEach(([px, py], i) => {
+        if (i === 0) ctx.moveTo(px * w, py * h); else ctx.lineTo(px * w, py * h);
+      });
       ctx.stroke();
       ctx.restore();
     };

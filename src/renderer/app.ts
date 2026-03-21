@@ -1,10 +1,11 @@
 // PDFox — renderer entry point
 // SPDX-License-Identifier: GPL-3.0-or-later
+// @ts-nocheck — DOM cast types to be added incrementally
 
 import { PDFViewer }        from './viewer.js';
 import { Annotator }        from './annotator.js';
 import { embedAnnotations } from './saver.js';
-import { PDFDocument }      from '../node_modules/pdf-lib/dist/pdf-lib.esm.js';
+import { PDFDocument }      from '../../node_modules/pdf-lib/dist/pdf-lib.esm.js';
 import { FindBar }          from './find.js';
 
 // ── State ──────────────────────────────────────────────────────

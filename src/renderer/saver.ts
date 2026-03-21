@@ -1,8 +1,9 @@
 // PDFox — save logic
 // Embeds in-memory annotations into PDF bytes using pdf-lib.
 // SPDX-License-Identifier: GPL-3.0-or-later
+// @ts-nocheck — types to be added incrementally
 
-import { PDFDocument, PDFName, PDFArray, PDFNumber, PDFString, degrees } from '../node_modules/pdf-lib/dist/pdf-lib.esm.js';
+import { PDFDocument, PDFName, PDFArray, PDFNumber, PDFString, degrees } from '../../node_modules/pdf-lib/dist/pdf-lib.esm.js';
 
 /**
  * Embed annotations into a PDF and return the modified bytes.

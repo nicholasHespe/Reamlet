@@ -18,7 +18,7 @@ function createWindow(openFilePath) {
     minWidth: 640,
     minHeight: 480,
     title: 'PDFox',
-    icon: path.join(__dirname, 'assets', 'pdfox_logo.png'),
+    icon: path.join(__dirname, '..', 'assets', 'pdfox_logo.png'),
     backgroundColor: '#1e1e1e',
     // Mac: use native traffic lights with hidden titlebar; Windows: fully custom frame
     ...(isMac
@@ -33,7 +33,7 @@ function createWindow(openFilePath) {
     },
   });
 
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
   // Ask renderer to handle the close so it can prompt for unsaved changes
   win.on('close', (e) => {
@@ -88,7 +88,7 @@ function buildMenu() {
 let _dragIcon = null;
 function getDragIcon() {
   if (_dragIcon) return _dragIcon;
-  _dragIcon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'pdfox_logo.png'));
+  _dragIcon = nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'pdfox_logo.png'));
   return _dragIcon;
 }
 

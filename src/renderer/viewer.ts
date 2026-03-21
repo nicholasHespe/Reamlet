@@ -1,15 +1,28 @@
 // PDFox — PDF.js viewer wrapper
 // Handles loading, rendering, zoom, rotation and viewport exposure.
 // SPDX-License-Identifier: GPL-3.0-or-later
+// @ts-nocheck — types to be added incrementally
 
-import * as pdfjsLib from '../node_modules/pdfjs-dist/build/pdf.mjs';
+import * as pdfjsLib from '../../node_modules/pdfjs-dist/build/pdf.mjs';
 const { TextLayer } = pdfjsLib;
 
 // Point the worker at the bundled worker file
 pdfjsLib.GlobalWorkerOptions.workerSrc =
-  new URL('../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
+  new URL('../../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
 
 export class PDFViewer {
+  container: HTMLElement;
+  pdfDoc: any;
+  scale: number;
+  pages: any[];
+  pageRotations: Record<number, number>;
+  pageBaseRotations: Record<number, number>;
+  fieldValues: Record<string, any>;
+  _annCache: Record<number, any[]>;
+  _pendingRender: Set<number>;
+  _io: IntersectionObserver | null;
+  isSleeping: boolean;
+
   /**
    * @param {HTMLElement} container  - .pdf-pages element to render pages into
    */

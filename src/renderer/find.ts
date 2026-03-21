@@ -1,8 +1,9 @@
 // PDFox — Find bar (Ctrl+F)
 // Searches text content across pages/tabs with exact, wildcard, and fuzzy modes.
 // SPDX-License-Identifier: GPL-3.0-or-later
+// @ts-nocheck — types to be added incrementally
 
-import * as pdfjsLib from '../node_modules/pdfjs-dist/build/pdf.mjs';
+import * as pdfjsLib from '../../node_modules/pdfjs-dist/build/pdf.mjs';
 
 // ── Utilities ───────────────────────────────────────────────────
 
@@ -28,6 +29,27 @@ function levenshtein(a, b) {
 // ── FindBar class ───────────────────────────────────────────────
 
 export class FindBar {
+  _getTabs: () => any[];
+  _getActiveTab: () => any;
+  _switchTab: (tab: any) => void;
+  _allTabMatches: Map<any, any[]>;
+  _matches: any[];
+  _currentIdx: number;
+  _query: string;
+  _scope: string;
+  _mode: string;
+  _open: boolean;
+  _searchTimer: ReturnType<typeof setTimeout> | null;
+  _layers: WeakMap<any, any>;
+  _allLayers: any[];
+  _bar: HTMLElement | null;
+  _input: HTMLElement | null;
+  _counter: HTMLElement | null;
+  _prev: HTMLElement | null;
+  _next: HTMLElement | null;
+  _close: HTMLElement | null;
+  _dropdown: HTMLElement | null;
+
   constructor({ getTabs, getActiveTab, switchTab }) {
     this._getTabs      = getTabs;
     this._getActiveTab = getActiveTab;
