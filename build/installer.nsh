@@ -28,7 +28,11 @@
 !macroend
 
 ; ----- Called when the checkbox is ticked and Finish is clicked -----------
+; Guard against the uninstaller-only build pass where the function would be
+; unreferenced and NSIS would promote the warning to a fatal error.
+!ifndef BUILD_UNINSTALLER
 Function SetAsDefaultPDF
   WriteRegStr HKCU "Software\Classes\.pdf" "" "PDF Document"
   System::Call "shell32::SHChangeNotify(i 0x08000000, i 0x1000, i 0, i 0)"
 FunctionEnd
+!endif
