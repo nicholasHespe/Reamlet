@@ -19,8 +19,17 @@ if not exist "%HOST_EXE%" (
 )
 
 :: Update only the "path" field in the manifest, preserving allowed_origins.
+:: Write a temp PS1 file to avoid cmd intercepting the pipe character.
 set "JSON_PATH=%HOST_EXE:\=\\%"
-powershell -Command "(Get-Content '%MANIFEST%' -Raw) -replace '\"path\":\s*\"[^\"]*\"', '\"path\": \"%JSON_PATH%\"' | Set-Content '%MANIFEST%' -NoNewline"
+set "PS_FILE=%TEMP%\reamlet_reg_%RANDOM%.ps1"
+echo $f = '%MANIFEST%'> "%PS_FILE%"
+echo $p = '%JSON_PATH%'>> "%PS_FILE%"
+echo $c = [System.IO.File]::ReadAllText($f)>> "%PS_FILE%"
+echo $r = '"path": "' + $p + '"'>> "%PS_FILE%"
+echo $c = $c -replace '"path":\s*"[^"]*"', $r>> "%PS_FILE%"
+echo [System.IO.File]::WriteAllText($f, $c)>> "%PS_FILE%"
+powershell -ExecutionPolicy Bypass -NoProfile -File "%PS_FILE%"
+del "%PS_FILE%" 2>nul
 
 set "KEY_NAME=com.reamlet.chromebridge"
 
