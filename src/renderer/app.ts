@@ -209,9 +209,12 @@ contextMenu.addEventListener('mousedown', (e) => {
       if (activeTab?.annotator) activeTab.annotator.setTool('highlight');
       syncToolButtons('highlight');
       break;
-    case 'find':
+    case 'find': {
+      const sel = window.getSelection()?.toString().trim();
+      if (sel) finder._input.value = sel;
       finder.open();
       break;
+    }
   }
 });
 
