@@ -5,8 +5,12 @@
 // @ts-expect-error — pdfjs-dist is imported via direct path for Electron's file:// ESM loader
 import * as _pdfjsLib from '../../node_modules/pdfjs-dist/build/pdf.mjs';
 import type * as PDFJSLib from 'pdfjs-dist';
-import type { TextItem } from 'pdfjs-dist';
 import type { Tab, Match } from './types.js';
+
+/** A PDF.js text content item that carries an actual string (vs a marked-content marker). */
+interface TextContentItem {
+  str: string; transform: number[]; width: number; height: number;
+}
 
 // Cast to the pdfjs-dist type surface so all downstream code is fully typed
 const pdfjsLib = _pdfjsLib as unknown as typeof PDFJSLib;
@@ -200,8 +204,8 @@ export class FindBar {
       const page = await pdfDoc.getPage(p);
       const tc   = await page.getTextContent();
       tab._findCache.set(p, {
-        items: tc.items
-          .filter((item): item is TextItem => 'str' in item)
+        items: (tc.items as unknown[])
+          .filter((item): item is TextContentItem => typeof item === 'object' && item !== null && 'str' in item)
           .map(item => ({
             str:    item.str,
             x:      item.transform[4],

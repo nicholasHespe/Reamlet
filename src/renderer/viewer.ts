@@ -260,7 +260,7 @@ export class PDFViewer {
     }
     if (!Array.isArray(explicitDest) || !explicitDest[0]) return null;
      
-    const pageIndex = await this.pdfDoc!.getPageIndex(explicitDest[0]);
+    const pageIndex = await this.pdfDoc!.getPageIndex(explicitDest[0] as { num: number; gen: number });
     return pageIndex + 1;
   }
 

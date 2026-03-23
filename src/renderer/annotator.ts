@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type { PDFViewer, PageData } from './viewer.js';
-import type { Annotation } from './types.js';
+import type { Annotation, ShapeAnnotation, HighlightAnnotation, TextAnnotation } from './types.js';
 
 export class Annotator {
   pages: PageData[];
@@ -282,7 +282,7 @@ export class Annotator {
         if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
           const w = canvas.width, h = canvas.height;
           this.annotations.push({
-            type: this.tool, pageNum,
+            type: this.tool as ShapeAnnotation['type'], pageNum,
             x1: x1 / w, y1: y1 / h,
             x2: x2 / w, y2: y2 / h,
             color:     this.color,
@@ -448,7 +448,7 @@ export class Annotator {
     sel.removeAllRanges();
     if (rects.length === 0) return;
 
-    const annot = { type: 'highlight', pageNum, rects, color: this.color };
+    const annot: HighlightAnnotation = { type: 'highlight', pageNum, rects, color: this.color };
     this.annotations.push(annot);
     this._pushHistory();
     const ctx = p.annotCanvas.getContext('2d')!;
@@ -471,7 +471,7 @@ export class Annotator {
       fontSize, weight, decor, color: this.color,
       onCommit: (text) => {
         if (!text) return;
-        const annot = {
+        const annot: TextAnnotation = {
           type: 'text', pageNum,
           x: cx / w, y: cy / h,
           text,
@@ -501,6 +501,7 @@ export class Annotator {
     this._selectedIdx = null;
     this._redrawPage(p, pageNum);
 
+    if (ann.type !== 'text') return; // _editTextBox is only called on text annotations
     const weight = ann.bold      ? 'bold'      : 'normal';
     const decor  = ann.underline ? 'underline' : 'none';
 
@@ -640,7 +641,7 @@ export class Annotator {
       ann.rects = ann.rects.map(r => ({ ...r, x: r.x + dx, y: r.y + dy }));
     } else if (ann.type === 'text') {
       ann.x += dx; ann.y += dy;
-    } else if (['rect', 'oval', 'line', 'arrow'].includes(ann.type)) {
+    } else if (ann.type === 'rect' || ann.type === 'oval' || ann.type === 'line' || ann.type === 'arrow') {
       ann.x1 += dx; ann.y1 += dy;
       ann.x2 += dx; ann.y2 += dy;
     }
@@ -657,7 +658,7 @@ export class Annotator {
       return { x: Math.min(...allX), y: Math.min(...allY), w: Math.max(...allX) - Math.min(...allX), h: Math.max(...allY) - Math.min(...allY) };
     } else if (ann.type === 'text') {
       return { x: ann.x * w - 2, y: ann.y * h - ann.fontSize - 2, w: 120, h: ann.fontSize * 2 + 4 };
-    } else if (['rect', 'oval', 'line', 'arrow'].includes(ann.type)) {
+    } else if (ann.type === 'rect' || ann.type === 'oval' || ann.type === 'line' || ann.type === 'arrow') {
       const x1 = Math.min(ann.x1, ann.x2) * w, x2 = Math.max(ann.x1, ann.x2) * w;
       const y1 = Math.min(ann.y1, ann.y2) * h, y2 = Math.max(ann.y1, ann.y2) * h;
       return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
@@ -808,7 +809,7 @@ export class Annotator {
         }
       });
 
-    } else if (['line', 'rect', 'oval', 'arrow'].includes(annot.type)) {
+    } else if (annot.type === 'line' || annot.type === 'rect' || annot.type === 'oval' || annot.type === 'arrow') {
       ctx.strokeStyle = annot.color;
       ctx.lineWidth   = annot.thickness;
       ctx.lineCap     = 'round';
