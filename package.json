@@ -20,7 +20,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^20.0.0",
-    "@vercel/pkg": "^5.8.1",
+    "pkg": "^5.8.1",
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3",
     "eslint": "^10.1.0",
