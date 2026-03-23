@@ -69,6 +69,7 @@ const colorBtn       = document.getElementById('color-btn')!;
 const colorDot       = document.getElementById('color-dot')!;
 const colorPanel     = document.getElementById('color-panel')!;
 const titleFilename  = document.getElementById('title-filename')!;
+const contextMenu    = document.getElementById('context-menu')!;
 
 // ── Platform setup ─────────────────────────────────────────────
 
@@ -172,6 +173,50 @@ colorBtn.addEventListener('click', (e) => {
 // Close colour panel when clicking anywhere else
 document.addEventListener('click', () => colorPanel.classList.add('hidden'));
 colorPanel.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Context menu ───────────────────────────────────────────────
+
+function _hideContextMenu() {
+  contextMenu.classList.add('hidden');
+}
+
+viewerHost.addEventListener('contextmenu', (e) => {
+  if (!activeTab) return;
+  e.preventDefault();
+  contextMenu.classList.remove('hidden');
+  const menuW = contextMenu.offsetWidth  || 140;
+  const menuH = contextMenu.offsetHeight || 90;
+  const left  = Math.min(e.clientX, window.innerWidth  - menuW - 4);
+  const top   = Math.min(e.clientY, window.innerHeight - menuH - 4);
+  contextMenu.style.left = `${Math.max(0, left)}px`;
+  contextMenu.style.top  = `${Math.max(0, top)}px`;
+});
+
+document.addEventListener('mousedown', (e) => {
+  if (!(e.target as Element)?.closest('#context-menu')) _hideContextMenu();
+});
+
+contextMenu.addEventListener('mousedown', (e) => {
+  const btn = (e.target as Element)?.closest('[data-ctx]') as HTMLElement | null;
+  if (!btn) return;
+  e.preventDefault();
+  _hideContextMenu();
+  switch (btn.dataset.ctx) {
+    case 'copy':
+      navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
+      break;
+    case 'highlight':
+      if (activeTab?.annotator) activeTab.annotator.setTool('highlight');
+      syncToolButtons('highlight');
+      break;
+    case 'find': {
+      const sel = window.getSelection()?.toString().trim();
+      if (sel) finder._input.value = sel;
+      finder.open();
+      break;
+    }
+  }
+});
 
 // ── Resize handles ─────────────────────────────────────────────
 
@@ -847,7 +892,10 @@ async function fitWidth() {
   if (!activeTab) return;
   const v  = activeTab.viewer;
   const vp = await v.getViewport(1);
-  await _applyZoomNow(Math.round(((activeTab.pane.clientWidth - 32) / (vp.width / v.scale)) * 100) / 100);
+  const tocW       = tocPanel.classList.contains('hidden') ? 0 : tocPanel.offsetWidth;
+  const sbRight    = tocW + SCROLLBAR_GAP + 10; // scrollbar sits left of toc (10px wide) with gap
+  const availableW = activeTab.pane.clientWidth - 2 * Math.max(sidebar.offsetWidth, sbRight);
+  await _applyZoomNow(Math.round(((availableW - 32) / (vp.width / v.scale)) * 100) / 100);
 }
 
 async function fitHeight() {
@@ -1094,6 +1142,7 @@ const _menuActions = {
   'zoom-100':    () => window.api.setUiZoom(1.0),
   'zoom-125':    () => window.api.setUiZoom(1.25),
   'zoom-150':    () => window.api.setUiZoom(1.5),
+  'extension-id': () => _openExtensionIdModal(),
   'zoom-200':    () => window.api.setUiZoom(2.0),
   'fit-width':   () => fitWidth(),
   'fit-height':  () => fitHeight(),
@@ -1138,11 +1187,42 @@ document.querySelectorAll('.titlebar-dropdown').forEach(dropdown => {
 
 window.api.onMenuEvent((event) => {
   switch (event) {
-    case 'menu-open':       openFile(); break;
-    case 'menu-save':       saveTab(activeTab); break;
-    case 'menu-save-copy':  saveTabCopy(activeTab); break;
-    case 'menu-close-tab':  if (activeTab) requestCloseTab(activeTab); break;
-    case 'menu-reopen-tab': reopenLastTab(); break;
+    case 'menu-open':         openFile(); break;
+    case 'menu-save':         saveTab(activeTab); break;
+    case 'menu-save-copy':    saveTabCopy(activeTab); break;
+    case 'menu-close-tab':    if (activeTab) requestCloseTab(activeTab); break;
+    case 'menu-reopen-tab':   reopenLastTab(); break;
+    case 'menu-extension-id': _openExtensionIdModal(); break;
+  }
+});
+
+// ── Extension ID modal ─────────────────────────────────────────
+
+async function _openExtensionIdModal() {
+  const input  = document.getElementById('ext-id-input')  as HTMLInputElement;
+  const modal  = document.getElementById('ext-id-modal')!;
+
+  const result = await window.api.getExtensionId();
+  input.value  = result.ok ? (result.id ?? '') : '';
+
+  modal.classList.remove('hidden');
+  input.focus();
+  input.select();
+}
+
+document.getElementById('ext-id-cancel')!.addEventListener('click', () => {
+  document.getElementById('ext-id-modal')!.classList.add('hidden');
+});
+
+document.getElementById('ext-id-save')!.addEventListener('click', async () => {
+  const input = document.getElementById('ext-id-input') as HTMLInputElement;
+  const id    = input.value.trim();
+  if (!id) return;
+  const result = await window.api.setExtensionId(id);
+  if (result.ok) {
+    document.getElementById('ext-id-modal')!.classList.add('hidden');
+  } else {
+    alert('Failed to save: ' + result.error);
   }
 });
 
