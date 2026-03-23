@@ -1,5 +1,5 @@
 # ───────────────────────────────────────────────────────────────
-#  PDFox CI — lint, type-check, and build on every push / PR
+#  Reamlet CI — lint, type-check, and build on every push / PR
 # ───────────────────────────────────────────────────────────────
 name: CI
 
@@ -36,8 +36,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Cache pnpm store
         uses: actions/cache@v4
@@ -73,8 +71,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Cache pnpm store
         uses: actions/cache@v4
@@ -113,8 +109,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Cache pnpm store
         uses: actions/cache@v4
@@ -151,8 +145,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Cache pnpm store
         uses: actions/cache@v4
