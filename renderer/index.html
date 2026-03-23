@@ -338,7 +338,7 @@
     </div>
   </div>
 
-  <!-- ── Extension ID modal ────────────────────────────────────── -->
+ <!-- ── Extension ID modal ────────────────────────────────────── -->
   <div id="ext-id-modal" class="modal-overlay hidden">
     <div class="modal-box" style="min-width:420px;">
       <div class="modal-title">Extension ID</div>
@@ -353,6 +353,13 @@
         <button class="modal-btn primary" id="ext-id-save">Save</button>
       </div>
     </div>
+  </div>
+
+  <!-- ── Context menu ──────────────────────────────────────────── -->
+  <div id="context-menu" class="hidden">
+    <button data-ctx="copy">Copy</button>
+    <button data-ctx="highlight">Highlight</button>
+    <button data-ctx="find">Find</button>
   </div>
 
   <script type="module" src="../out/renderer/app.js"></script>
