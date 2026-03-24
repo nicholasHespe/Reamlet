@@ -935,6 +935,14 @@ html, body {
   text-align: left;
 }
 #context-menu button:hover { background: var(--accent); color: #fff; }
+#context-menu button:disabled { opacity: 0.4; cursor: default; }
+#context-menu button:disabled:hover { background: transparent; color: var(--text); }
+
+.ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 6px;
+}
 
 /* ── macOS platform adjustments ───────────────────────────────── */
 /* Hide custom win-controls — native traffic lights are used instead */

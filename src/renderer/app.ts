@@ -70,6 +70,8 @@ const colorDot       = document.getElementById('color-dot')!;
 const colorPanel     = document.getElementById('color-panel')!;
 const titleFilename  = document.getElementById('title-filename')!;
 const contextMenu    = document.getElementById('context-menu')!;
+const ctxCut         = document.querySelector('[data-ctx="cut"]')   as HTMLButtonElement;
+const ctxPaste       = document.querySelector('[data-ctx="paste"]') as HTMLButtonElement;
 
 // ── Platform setup ─────────────────────────────────────────────
 
@@ -183,6 +185,15 @@ function _hideContextMenu() {
 viewerHost.addEventListener('contextmenu', (e) => {
   if (!activeTab) return;
   e.preventDefault();
+
+  // Show Cut only when a cuttable annotation is selected; Paste when clipboard has content
+  const ann = activeTab.annotator;
+  const selectedAnn = ann && ann._selectedIdx !== null ? ann.annotations[ann._selectedIdx] : null;
+  const canCut = selectedAnn !== null && selectedAnn !== undefined &&
+    Annotator._cuttableTypes.includes(selectedAnn.type);
+  ctxCut.style.display   = canCut ? '' : 'none';
+  ctxPaste.style.display = (ann && ann._clipboard) ? '' : 'none';
+
   contextMenu.classList.remove('hidden');
   const menuW = contextMenu.offsetWidth  || 140;
   const menuH = contextMenu.offsetHeight || 90;
@@ -202,6 +213,8 @@ contextMenu.addEventListener('mousedown', (e) => {
   e.preventDefault();
   _hideContextMenu();
   switch (btn.dataset.ctx) {
+    case 'cut':   activeTab?.annotator?.cut();   break;
+    case 'paste': activeTab?.annotator?.paste();  break;
     case 'copy':
       navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
       break;

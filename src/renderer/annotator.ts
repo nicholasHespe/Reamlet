@@ -26,6 +26,7 @@ export class Annotator {
   _dragStart: { x: number; y: number } | null;
   _dragOrigAnn: Annotation | null;
   _dragPageRect: DOMRect | null;
+  _clipboard: Annotation | null;
   _history: string[];
   _histIdx: number;
   _handlers: Record<number, unknown>;
@@ -64,6 +65,7 @@ export class Annotator {
     this._dragStart       = null;  // { x, y } screen pixels
     this._dragOrigAnn     = null;  // deep copy of annotation before drag
     this._dragPageRect    = null;  // wrapper getBoundingClientRect at drag start
+    this._clipboard       = null;  // cut annotation waiting to be pasted
 
     this._history = ['[]'];
     this._histIdx = 0;
@@ -126,6 +128,40 @@ export class Annotator {
     this._clearSelection(false);
     const data = JSON.parse(this._history[this._histIdx]);
     this.annotations.splice(0, this.annotations.length, ...data);
+    this.redrawAll();
+  }
+
+  // ── Cut / paste ─────────────────────────────────────────────
+
+  static readonly _cuttableTypes = ['text', 'rect', 'oval', 'line', 'arrow'];
+
+  cut() {
+    if (this._selectedIdx === null) return;
+    const ann = this.annotations[this._selectedIdx];
+    if (!Annotator._cuttableTypes.includes(ann.type)) return;
+    this._clipboard = JSON.parse(JSON.stringify(ann)) as Annotation;
+    this.annotations.splice(this._selectedIdx, 1);
+    this._selectedIdx     = null;
+    this._selectedPageNum = null;
+    this._pushHistory();
+    this.redrawAll();
+  }
+
+  paste() {
+    if (!this._clipboard) return;
+    const clone = JSON.parse(JSON.stringify(this._clipboard)) as Annotation;
+    const off = 0.03;
+    if (clone.type === 'text') {
+      clone.x += off;
+      clone.y += off;
+    } else {
+      (clone as ShapeAnnotation).x1 += off;
+      (clone as ShapeAnnotation).y1 += off;
+      (clone as ShapeAnnotation).x2 += off;
+      (clone as ShapeAnnotation).y2 += off;
+    }
+    this.annotations.push(clone);
+    this._pushHistory();
     this.redrawAll();
   }
 
