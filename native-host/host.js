@@ -113,15 +113,34 @@ function moveToTemp(filePath) {
 // ── Message handler ───────────────────────────────────────────
 
 function handleMessage(msg) {
-  const { url, background } = msg;
-  if (!url || typeof url !== 'string') {
-    reply({ ok: false, error: 'missing url' });
-    return;
-  }
+  const { url, bytes, background } = msg;
 
   const { found: reamletPath, checked } = findReamlet();
   if (!reamletPath) {
     reply({ ok: false, error: 'Reamlet.exe not found', checked });
+    return;
+  }
+
+  // bytes message: extension fetched the PDF directly and sent the raw bytes
+  // as base64 (used when chrome.downloads fails with SERVER_BAD_CONTENT).
+  if (bytes) {
+    try {
+      const tempDir = path.join(os.tmpdir(), 'ReamletDownloads');
+      fs.mkdirSync(tempDir, { recursive: true });
+      const tempPath = path.join(tempDir, `${Date.now()}.pdf`);
+      fs.writeFileSync(tempPath, Buffer.from(bytes, 'base64'));
+      const args = background ? [tempPath, '--background'] : [tempPath];
+      const child = spawn(reamletPath, args, { detached: true, stdio: 'ignore' });
+      child.unref();
+      reply({ ok: true });
+    } catch (err) {
+      reply({ ok: false, error: err.message });
+    }
+    return;
+  }
+
+  if (!url || typeof url !== 'string') {
+    reply({ ok: false, error: 'missing url or bytes' });
     return;
   }
 
