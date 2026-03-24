@@ -539,8 +539,8 @@ export class Annotator {
       position:        absolute;
       left:            ${left - 4}px;
       top:             ${top - fontSize / 2}px;
-      min-width:       120px;
-      min-height:      ${fontSize + 6}px;
+      width:           ${Math.max(fontSize * 8, 80)}px;
+      height:          ${fontSize + 8}px;
       background:      transparent;
       border:          1px dashed rgba(128,128,128,0.6);
       font:            ${weight} ${fontSize}px system-ui, sans-serif;
