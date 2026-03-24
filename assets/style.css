@@ -616,8 +616,8 @@ html, body {
 #viewer-scrollbar {
   position: absolute;
   right: 0;
-  top: 0;
-  bottom: 0;
+  top: 4px;
+  bottom: 4px;
   width: 10px;
   z-index: 15;
   display: none;

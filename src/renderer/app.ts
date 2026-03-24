@@ -177,8 +177,8 @@ function _syncScrollbarH() {
 
 function _positionScrollbarH() {
   const tocW = !tocPanel.classList.contains('hidden') ? tocPanel.offsetWidth : 0;
-  viewerScrollbarH.style.left  = `${sidebar.offsetWidth}px`;
-  viewerScrollbarH.style.right = `${tocW + SCROLLBAR_GAP + 10}px`;
+  viewerScrollbarH.style.left  = `${sidebar.offsetWidth + 4}px`;
+  viewerScrollbarH.style.right = `${tocW + SCROLLBAR_GAP + 10 + 4}px`;
   _syncScrollbarH();
 }
 
