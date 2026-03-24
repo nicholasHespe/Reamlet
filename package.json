@@ -14,18 +14,19 @@
     "build-mac": "pnpm run build && electron-builder --mac dmg --universal"
   },
   "dependencies": {
+    "electron-clipboard-ex": "^1.3.3",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.4.168"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^20.0.0",
-    "pkg": "^5.8.1",
     "electron": "^31.0.0",
     "electron-builder": "^24.13.3",
     "eslint": "^10.1.0",
     "globals": "^17.4.0",
     "jiti": "^2.6.1",
+    "pkg": "^5.8.1",
     "typescript": "^5.5.0",
     "typescript-eslint": "^8.57.1"
   },
@@ -105,7 +106,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "electron"
+      "electron",
+      "electron-clipboard-ex"
     ]
   },
   "license": "GPL-3.0-or-later"
