@@ -293,7 +293,14 @@ export class Annotator {
         this._redrawPage(p, pageNum);
 
       } else if (this.tool === 'text') {
-        this._placeTextBox(p, pageNum, this._canvasPos(canvas, e));
+        const [cx, cy] = this._canvasPos(canvas, e);
+        const w = canvas.width, h = canvas.height;
+        const idx = this._hitTest(pageNum, cx / w, cy / h);
+        if (idx >= 0 && this.annotations[idx].type === 'text') {
+          this._editTextBox(p, pageNum, idx);
+        } else {
+          this._placeTextBox(p, pageNum, [cx, cy]);
+        }
 
       } else if (this.tool === 'eraser' && this._erasing) {
         this._erasing = false;
@@ -528,8 +535,8 @@ export class Annotator {
     ta.value = initialText;
     ta.style.cssText = `
       position:        absolute;
-      left:            ${left}px;
-      top:             ${top}px;
+      left:            ${left - 4}px;
+      top:             ${top - 2}px;
       min-width:       120px;
       min-height:      ${fontSize + 6}px;
       background:      transparent;
