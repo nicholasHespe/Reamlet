@@ -38,6 +38,18 @@ let _sbDragging        = false;
 let _sbDragStartY      = 0;
 let _sbDragStartScroll = 0;
 
+// Horizontal scrollbar drag state
+let _sbhDragging        = false;
+let _sbhDragStartX      = 0;
+let _sbhDragStartScroll = 0;
+
+// Pan tool drag state
+let _panDragging        = false;
+let _panStartX          = 0;
+let _panStartY          = 0;
+let _panStartScrollLeft = 0;
+let _panStartScrollTop  = 0;
+
 // Native file drag state (drag-to-external-app)
 let _nativeDrag: { filePath: string; x: number; y: number } | null = null; // { filePath, x, y } while tracking mousedown before threshold
 
@@ -49,9 +61,11 @@ let myWindowId: number | null = null;
 
 // ── DOM refs ───────────────────────────────────────────────────
 
-const sidebar              = document.getElementById('sidebar')!;
-const viewerScrollbar      = document.getElementById('viewer-scrollbar')!;
-const viewerScrollbarThumb = document.getElementById('viewer-scrollbar-thumb')!;
+const sidebar               = document.getElementById('sidebar')!;
+const viewerScrollbar       = document.getElementById('viewer-scrollbar')!;
+const viewerScrollbarThumb  = document.getElementById('viewer-scrollbar-thumb')!;
+const viewerScrollbarH      = document.getElementById('viewer-scrollbar-h')!;
+const viewerScrollbarThumbH = document.getElementById('viewer-scrollbar-thumb-h')!;
 const tabBar         = document.getElementById('tab-bar')!;
 const toolsPanel     = document.getElementById('tools-panel')!;
 const viewerHost     = document.getElementById('viewer-host')!;
@@ -142,6 +156,70 @@ function _positionScrollbar() {
   viewerScrollbar.style.right = `${base + SCROLLBAR_GAP}px`;
   _syncScrollbar();
 }
+
+// ── Horizontal scrollbar ───────────────────────────────────────
+
+function _syncScrollbarH() {
+  if (!activeTab) { viewerScrollbarH.style.display = 'none'; return; }
+  const pane    = activeTab.pane;
+  const scrollW = pane.scrollWidth;
+  const clientW = pane.clientWidth;
+  if (scrollW <= clientW) { viewerScrollbarH.style.display = 'none'; return; }
+  viewerScrollbarH.style.display = 'block';
+  const trackW      = viewerScrollbarH.clientWidth;
+  const thumbW      = Math.max(30, Math.round((clientW / scrollW) * trackW));
+  const maxScroll   = scrollW - clientW;
+  const maxThumbLeft = trackW - thumbW;
+  const thumbLeft   = Math.round((pane.scrollLeft / maxScroll) * maxThumbLeft);
+  viewerScrollbarThumbH.style.width = `${thumbW}px`;
+  viewerScrollbarThumbH.style.left  = `${thumbLeft}px`;
+}
+
+function _positionScrollbarH() {
+  const tocW = !tocPanel.classList.contains('hidden') ? tocPanel.offsetWidth : 0;
+  viewerScrollbarH.style.left  = `${sidebar.offsetWidth}px`;
+  viewerScrollbarH.style.right = `${tocW + SCROLLBAR_GAP + 10}px`;
+  _syncScrollbarH();
+}
+
+// When content overflows horizontally, pad pdf-pages so the document's left edge
+// can be scrolled flush with the sidebar and the right edge flush with the TOC.
+function _updateHorizontalPadding() {
+  if (!activeTab) return;
+  const pane    = activeTab.pane;
+  const pagesEl = pane.querySelector('.pdf-pages') as HTMLElement | null;
+  if (!pagesEl) return;
+  const scrollW = pane.scrollWidth;
+  const clientW = pane.clientWidth;
+  if (scrollW > clientW) {
+    const tocW = !tocPanel.classList.contains('hidden') ? tocPanel.offsetWidth : 0;
+    pagesEl.style.paddingLeft  = `${sidebar.offsetWidth}px`;
+    pagesEl.style.paddingRight = `${tocW}px`;
+  } else {
+    pagesEl.style.paddingLeft  = '';
+    pagesEl.style.paddingRight = '';
+  }
+}
+
+// Jump scroll on track click (not thumb)
+viewerScrollbarH.addEventListener('mousedown', (e) => {
+  if (e.target === viewerScrollbarThumbH || !activeTab) return;
+  const rect  = viewerScrollbarH.getBoundingClientRect();
+  const ratio = (e.clientX - rect.left) / rect.width;
+  activeTab.pane.scrollLeft = ratio * (activeTab.pane.scrollWidth - activeTab.pane.clientWidth);
+});
+
+// Thumb drag start
+viewerScrollbarThumbH.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  _sbhDragging        = true;
+  _sbhDragStartX      = e.clientX;
+  _sbhDragStartScroll = activeTab?.pane.scrollLeft ?? 0;
+  viewerScrollbarThumbH.classList.add('dragging');
+  document.body.style.userSelect = 'none';
+});
 
 // Jump scroll on track click (not thumb)
 viewerScrollbar.addEventListener('mousedown', (e) => {
@@ -249,10 +327,14 @@ document.addEventListener('mousemove', (e) => {
   if (_resizingSidebar) {
     const w = Math.max(SIDEBAR_MIN, e.clientX);
     sidebar.style.width = w + 'px';
+    _positionScrollbarH();
+    _updateHorizontalPadding();
   }
   if (_resizingToc) {
     const w = Math.max(TOC_MIN, window.innerWidth - e.clientX);
     tocPanel.style.width = w + 'px';
+    _positionScrollbarH();
+    _updateHorizontalPadding();
   }
   if (_sbDragging && activeTab) {
     const pane       = activeTab.pane;
@@ -263,6 +345,23 @@ document.addEventListener('mousemove', (e) => {
     const dy         = e.clientY - _sbDragStartY;
     const maxScroll  = pane.scrollHeight - pane.clientHeight;
     pane.scrollTop   = _sbDragStartScroll + (dy / maxTravel) * maxScroll;
+  }
+  if (_sbhDragging && activeTab) {
+    const pane       = activeTab.pane;
+    const trackW     = viewerScrollbarH.clientWidth;
+    const thumbW     = viewerScrollbarThumbH.offsetWidth;
+    const maxTravel  = trackW - thumbW;
+    if (maxTravel <= 0) return;
+    const dx         = e.clientX - _sbhDragStartX;
+    const maxScroll  = pane.scrollWidth - pane.clientWidth;
+    pane.scrollLeft  = _sbhDragStartScroll + (dx / maxTravel) * maxScroll;
+  }
+  if (_panDragging && activeTab) {
+    const pane = activeTab.pane;
+    pane.scrollLeft = _panStartScrollLeft - (e.clientX - _panStartX);
+    pane.scrollTop  = _panStartScrollTop  - (e.clientY - _panStartY);
+    _syncScrollbar();
+    _syncScrollbarH();
   }
   if (_nativeDrag) {
     const dx = e.clientX - _nativeDrag.x;
@@ -281,6 +380,8 @@ document.addEventListener('mouseup', () => {
     sidebarResizeHandle.classList.remove('resizing');
     document.body.style.cursor     = '';
     document.body.style.userSelect = '';
+    _positionScrollbarH();
+    _updateHorizontalPadding();
   }
   if (_resizingToc) {
     _resizingToc = false;
@@ -289,11 +390,23 @@ document.addEventListener('mouseup', () => {
     document.body.style.cursor     = '';
     document.body.style.userSelect = '';
     _positionScrollbar();
+    _positionScrollbarH();
+    _updateHorizontalPadding();
   }
   _nativeDrag = null;
   if (_sbDragging) {
     _sbDragging = false;
     viewerScrollbarThumb.classList.remove('dragging');
+    document.body.style.userSelect = '';
+  }
+  if (_sbhDragging) {
+    _sbhDragging = false;
+    viewerScrollbarThumbH.classList.remove('dragging');
+    document.body.style.userSelect = '';
+  }
+  if (_panDragging && activeTab) {
+    _panDragging = false;
+    activeTab.pane.classList.remove('panning');
     document.body.style.userSelect = '';
   }
 });
@@ -529,6 +642,7 @@ function switchTab(tab: Tab) {
   updatePageDisplay(tab);
   attachScrollListener(tab);
   _positionScrollbar();
+  _positionScrollbarH();
   finder.onTabSwitch();
 }
 
@@ -682,6 +796,7 @@ async function _loadTabContent(tab: Tab) {
     renderToc(tab.outline);
     updatePageDisplay(tab);
     _syncScrollbar();
+    _positionScrollbarH();
   }
 }
 
@@ -885,6 +1000,8 @@ async function _applyZoomNow(scale: number) {
   activeTab.annotator!.pages = v.pages;
   activeTab.annotator!.redrawAll();
   _syncScrollbar();
+  _updateHorizontalPadding();
+  _syncScrollbarH();
   finder.onZoom();
 }
 
@@ -932,9 +1049,24 @@ function updatePageDisplay(tab: Tab | null) {
 
 function attachScrollListener(tab: Tab) {
   if (_paneScrollCleanup) _paneScrollCleanup();
-  const handler = () => { updatePageDisplay(tab); _syncScrollbar(); };
-  tab.pane.addEventListener('scroll', handler, { passive: true });
-  _paneScrollCleanup = () => tab.pane.removeEventListener('scroll', handler);
+  const scrollHandler = () => { updatePageDisplay(tab); _syncScrollbar(); _syncScrollbarH(); };
+  const panHandler = (e: MouseEvent) => {
+    if (e.button !== 0 || activeTab?.annotator?.tool !== 'pan') return;
+    e.preventDefault();
+    _panDragging        = true;
+    _panStartX          = e.clientX;
+    _panStartY          = e.clientY;
+    _panStartScrollLeft = tab.pane.scrollLeft;
+    _panStartScrollTop  = tab.pane.scrollTop;
+    tab.pane.classList.add('panning');
+    document.body.style.userSelect = 'none';
+  };
+  tab.pane.addEventListener('scroll',     scrollHandler, { passive: true });
+  tab.pane.addEventListener('mousedown',  panHandler);
+  _paneScrollCleanup = () => {
+    tab.pane.removeEventListener('scroll',    scrollHandler);
+    tab.pane.removeEventListener('mousedown', panHandler);
+  };
 }
 
 function jumpToPage(pageNum: number) {
@@ -1016,6 +1148,7 @@ function syncToolButtons(tool: string) {
   document.querySelectorAll('.tool-btn').forEach(btn => {
     btn.classList.toggle('active', (btn as HTMLElement).dataset.tool === tool);
   });
+  if (activeTab) activeTab.pane.classList.toggle('pan-active', tool === 'pan');
 }
 
 function syncTextFormatButtons(annotator: Annotator) {
@@ -1119,7 +1252,7 @@ document.addEventListener('keydown', async (e) => {
 
   const toolMap = {
     d: 'draw', h: 'highlight', t: 'text', Escape: 'select',
-    l: 'line', r: 'rect', o: 'oval', a: 'arrow', e: 'eraser',
+    l: 'line', r: 'rect', o: 'oval', a: 'arrow', e: 'eraser', p: 'pan',
   };
   const tool = (toolMap as Record<string, string>)[e.key];
   if (tool) {
