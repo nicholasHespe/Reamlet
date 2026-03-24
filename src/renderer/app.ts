@@ -682,6 +682,7 @@ async function _loadTabContent(tab: Tab) {
     renderToc(tab.outline);
     updatePageDisplay(tab);
     _syncScrollbar();
+    await fitWidth();
   }
 }
 
