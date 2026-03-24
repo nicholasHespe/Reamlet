@@ -182,23 +182,16 @@ function _positionScrollbarH() {
   _syncScrollbarH();
 }
 
-// When content overflows horizontally, pad pdf-pages so the document's left edge
-// can be scrolled flush with the sidebar and the right edge flush with the TOC.
+// Pad pdf-pages so the document can be scrolled until its edges are visible
+// past the sidebar and TOC panel. Always applied so margin:auto centering works.
 function _updateHorizontalPadding() {
   if (!activeTab) return;
   const pane    = activeTab.pane;
   const pagesEl = pane.querySelector('.pdf-pages') as HTMLElement | null;
   if (!pagesEl) return;
-  const scrollW = pane.scrollWidth;
-  const clientW = pane.clientWidth;
-  if (scrollW > clientW) {
-    const tocW = !tocPanel.classList.contains('hidden') ? tocPanel.offsetWidth : 0;
-    pagesEl.style.paddingLeft  = `${sidebar.offsetWidth}px`;
-    pagesEl.style.paddingRight = `${tocW}px`;
-  } else {
-    pagesEl.style.paddingLeft  = '';
-    pagesEl.style.paddingRight = '';
-  }
+  const tocW = !tocPanel.classList.contains('hidden') ? tocPanel.offsetWidth : 0;
+  pagesEl.style.paddingLeft  = `${sidebar.offsetWidth}px`;
+  pagesEl.style.paddingRight = `${tocW}px`;
 }
 
 // Jump scroll on track click (not thumb)
