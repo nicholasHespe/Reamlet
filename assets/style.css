@@ -628,13 +628,13 @@ html, body {
   left: 2px;
   right: 2px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.45);
+  background: rgba(180, 180, 180, 0.6);
   transition: background 0.1s;
   cursor: grab;
   min-height: 30px;
 }
 #viewer-scrollbar-thumb:hover,
-#viewer-scrollbar-thumb.dragging { background: rgba(255, 255, 255, 0.7); cursor: grabbing; }
+#viewer-scrollbar-thumb.dragging { background: rgba(200, 200, 200, 0.85); cursor: grabbing; }
 
 /* ── Horizontal custom scrollbar ─────────────────────────────── */
 #viewer-scrollbar-h {
@@ -652,13 +652,13 @@ html, body {
   top: 2px;
   bottom: 2px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.45);
+  background: rgba(180, 180, 180, 0.6);
   transition: background 0.1s;
   cursor: grab;
   min-width: 30px;
 }
 #viewer-scrollbar-thumb-h:hover,
-#viewer-scrollbar-thumb-h.dragging { background: rgba(255, 255, 255, 0.7); cursor: grabbing; }
+#viewer-scrollbar-thumb-h.dragging { background: rgba(200, 200, 200, 0.85); cursor: grabbing; }
 
 /* ── PDF page container ───────────────────────────────────────── */
 .viewer-pane {
@@ -680,7 +680,7 @@ html, body {
   flex-direction: column;
   align-items: flex-start;
   min-width: 100%;
-  padding: 16px 0;
+  padding: 20px 0;
   gap: 12px;
 }
 

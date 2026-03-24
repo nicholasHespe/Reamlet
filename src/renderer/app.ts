@@ -190,8 +190,9 @@ function _updateHorizontalPadding() {
   const pagesEl = pane.querySelector('.pdf-pages') as HTMLElement | null;
   if (!pagesEl) return;
   const tocW = !tocPanel.classList.contains('hidden') ? tocPanel.offsetWidth : 0;
-  pagesEl.style.paddingLeft  = `${sidebar.offsetWidth}px`;
-  pagesEl.style.paddingRight = `${tocW}px`;
+  const edgePad = 20;
+  pagesEl.style.paddingLeft  = `${sidebar.offsetWidth + edgePad}px`;
+  pagesEl.style.paddingRight = `${tocW + edgePad}px`;
 }
 
 // Jump scroll on track click (not thumb)
