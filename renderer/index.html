@@ -134,6 +134,14 @@
           <path d="M6.5 17.5l4-4"/>
         </svg>
       </button>
+
+      <span class="sep"></span>
+
+      <button id="tool-pan" class="tool-btn" title="Pan (P)" data-tool="pan">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 11V8a2 2 0 0 0-4 0v1a2 2 0 0 0-4 0V7a2 2 0 0 0-4 0v6l-1.5-1.5a2 2 0 0 0-2.83 2.83L6 20h12v-3a4 4 0 0 0-4-4h4z"/>
+        </svg>
+      </button>
     </div>
 
     <!-- CENTER: page navigation -->
@@ -209,6 +217,11 @@
       <div id="empty-state">
         <p>No file open.<br>Press <kbd>Ctrl+O</kbd> to open a PDF.</p>
       </div>
+    </div>
+
+    <!-- Horizontal scrollbar (shown only when content overflows horizontally) -->
+    <div id="viewer-scrollbar-h">
+      <div id="viewer-scrollbar-thumb-h"></div>
     </div>
 
     <!-- Left sidebar: permanent overlay -->

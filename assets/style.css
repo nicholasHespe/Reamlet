@@ -636,6 +636,30 @@ html, body {
 #viewer-scrollbar-thumb:hover,
 #viewer-scrollbar-thumb.dragging { background: rgba(255, 255, 255, 0.5); cursor: grabbing; }
 
+/* ── Horizontal custom scrollbar ─────────────────────────────── */
+#viewer-scrollbar-h {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 10px;
+  z-index: 15;
+  display: none;
+  cursor: pointer;
+}
+#viewer-scrollbar-thumb-h {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.25);
+  transition: background 0.1s;
+  cursor: grab;
+  min-width: 30px;
+}
+#viewer-scrollbar-thumb-h:hover,
+#viewer-scrollbar-thumb-h.dragging { background: rgba(255, 255, 255, 0.5); cursor: grabbing; }
+
 /* ── PDF page container ───────────────────────────────────────── */
 .viewer-pane {
   position: absolute;
@@ -648,6 +672,8 @@ html, body {
 }
 .viewer-pane::-webkit-scrollbar { display: none; } /* Chrome/Edge/Safari */
 .viewer-pane.active { display: block; }
+.viewer-pane.pan-active { cursor: grab; }
+.viewer-pane.pan-active.panning { cursor: grabbing; }
 
 .pdf-pages {
   display: flex;
@@ -897,7 +923,7 @@ html, body {
 
 /* ── Print ────────────────────────────────────────────────────── */
 @media print {
-  #topbar, #sidebar, #toc-panel, #empty-state, #viewer-scrollbar { display: none !important; }
+  #topbar, #sidebar, #toc-panel, #empty-state, #viewer-scrollbar, #viewer-scrollbar-h { display: none !important; }
   #content-area { position: static; overflow: visible; }
   #viewer-host  { position: static; overflow: visible; }
   .viewer-pane  { display: none; position: static; overflow: visible; }
