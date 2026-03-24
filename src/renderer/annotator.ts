@@ -538,7 +538,7 @@ export class Annotator {
     ta.style.cssText = `
       position:        absolute;
       left:            ${left - 4}px;
-      top:             ${top - 2}px;
+      top:             ${top - fontSize / 2}px;
       width:           ${Math.max(fontSize * 8, 80)}px;
       height:          ${fontSize + 8}px;
       background:      transparent;
@@ -825,7 +825,7 @@ export class Annotator {
       ctx.font      = `${weight}${fs}px system-ui, sans-serif`;
       annot.text.split('\n').forEach((line: string, i: number) => {
         const x = annot.x * w;
-        const y = annot.y * h + i * (fs + 2) + fs;
+        const y = annot.y * h + i * (fs + 2) + fs / 2 + 2;
         ctx.fillText(line, x, y);
         if (annot.underline) {
           const metrics = ctx.measureText(line);
