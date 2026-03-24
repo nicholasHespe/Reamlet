@@ -861,6 +861,7 @@ export class Annotator {
       oval:      'crosshair',
       arrow:     'crosshair',
       eraser:    'cell',
+      pan:       'inherit', // pane-level cursor handles grab/grabbing
     };
     this.pages.forEach(p => {
       p.annotCanvas.style.cursor = (cursors as Record<string, string>)[this.tool] || 'default';
