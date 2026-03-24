@@ -5,7 +5,7 @@
 
 import type { BrowserWindow as BW, NativeImage, IpcMainInvokeEvent, IpcMainEvent, Event as ElectronEvent } from 'electron';
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, shell, clipboard } = require('electron');
 const path  = require('path');
 const fs    = require('fs');
 const os    = require('os');
@@ -212,6 +212,28 @@ ipcMain.handle('notify-tab-transferred', (_event: IpcMainInvokeEvent, sourceWind
 
 ipcMain.on('open-devtools', (event: IpcMainEvent) => {
   BrowserWindow.fromWebContents(event.sender)?.webContents.toggleDevTools();
+});
+
+// Copy a file to the system clipboard using the CF_HDROP format so it can be
+// pasted into Windows Explorer, email clients, etc.
+ipcMain.handle('copy-file-to-clipboard', (_event: IpcMainInvokeEvent, filePath: string) => {
+  const pFiles = 20; // byte offset to file list (size of DROPFILES header)
+  const pathBuf = Buffer.from(filePath + '\0\0', 'ucs2'); // UTF-16LE + double null
+  const buf = Buffer.alloc(pFiles + pathBuf.length);
+  buf.writeUInt32LE(pFiles, 0); // pFiles  — offset to file name list
+  buf.writeUInt32LE(0, 4);      // pt.x
+  buf.writeUInt32LE(0, 8);      // pt.y
+  buf.writeUInt32LE(0, 12);     // fNC
+  buf.writeUInt32LE(1, 16);     // fWide   — 1 = Unicode paths
+  pathBuf.copy(buf, pFiles);
+  clipboard.writeBuffer('CF_HDROP', buf);
+  return { ok: true };
+});
+
+// Show the file in its containing folder in Windows Explorer / Finder
+ipcMain.handle('reveal-in-explorer', (_event: IpcMainInvokeEvent, filePath: string) => {
+  shell.showItemInFolder(filePath);
+  return { ok: true };
 });
 
 // Read / write the extension ID in the native messaging host manifest.
