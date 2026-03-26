@@ -61,17 +61,16 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
 
     const { width: pdfW, height: pdfH } = await viewer.getPageSize(pageNum);
     const totalRot = viewer.getTotalRotation(pageNum);
-    const scale    = viewer.scale;
 
     for (const ann of pageAnns) {
-      if      (ann.type === 'draw')          _addInkAnnotation      (pdfPage, ann,           pdfW, pdfH, totalRot, scale);
-      else if (ann.type === 'freeHighlight') _addInkAnnotation      (pdfPage, ann,           pdfW, pdfH, totalRot, scale);
+      if      (ann.type === 'draw')          _addInkAnnotation      (pdfPage, ann,           pdfW, pdfH, totalRot);
+      else if (ann.type === 'freeHighlight') _addInkAnnotation      (pdfPage, ann,           pdfW, pdfH, totalRot);
       else if (ann.type === 'highlight')     _addHighlightAnnotation(pdfPage, ann,           pdfW, pdfH, totalRot);
       else if (ann.type === 'text')          _addFreeTextAnnotation (pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'line')          _addLineAnnotation     (pdfPage, ann,           pdfW, pdfH, totalRot, scale);
-      else if (ann.type === 'arrow')         _addArrowAnnotation    (pdfPage, ann,           pdfW, pdfH, totalRot, scale);
-      else if (ann.type === 'rect')          _addSquareAnnotation   (pdfPage, ann,           pdfW, pdfH, totalRot, scale);
-      else if (ann.type === 'oval')          _addCircleAnnotation   (pdfPage, ann,           pdfW, pdfH, totalRot, scale);
+      else if (ann.type === 'line')          _addLineAnnotation     (pdfPage, ann,           pdfW, pdfH, totalRot);
+      else if (ann.type === 'arrow')         _addArrowAnnotation    (pdfPage, ann,           pdfW, pdfH, totalRot);
+      else if (ann.type === 'rect')          _addSquareAnnotation   (pdfPage, ann,           pdfW, pdfH, totalRot);
+      else if (ann.type === 'oval')          _addCircleAnnotation   (pdfPage, ann,           pdfW, pdfH, totalRot);
     }
   }
 
@@ -109,9 +108,8 @@ function hexToRgb01(hex: string): { r: number; g: number; b: number } {
 
 // ── Annotation writers ───────────────────────────────────────
 
-function _addInkAnnotation(pdfPage: PDFPage, ann: DrawAnnotation, pdfW: number, pdfH: number, rot: number, scale: number): void {
+function _addInkAnnotation(pdfPage: PDFPage, ann: DrawAnnotation, pdfW: number, pdfH: number, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
-  const w = ann.thickness / scale; // canvas px → PDF pts
 
   const inkPoints = ann.points.flatMap(([nx, ny]: [number, number]) => {
     const [x, y] = toPdfCoords(nx, ny, pdfW, pdfH, rot);
@@ -123,14 +121,14 @@ function _addInkAnnotation(pdfPage: PDFPage, ann: DrawAnnotation, pdfW: number, 
   const pdfPts = ann.points.map(([nx, ny]: [number, number]) => toPdfCoords(nx, ny, pdfW, pdfH, rot));
   const xs  = pdfPts.map(([x]: [number, number]) => x);
   const ys  = pdfPts.map(([, y]: [number, number]) => y);
-  const pad = w;
+  const pad = ann.thickness;
 
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Ink'),
     Rect:    [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad],
     InkList: inkList,
-    BS:      pdfPage.doc.context.obj({ W: w }),
+    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     CA:      PDFNumber.of(ann.type === 'freeHighlight' ? 0.4 : 1),
     F:       PDFNumber.of(4),
@@ -190,44 +188,42 @@ function _addFreeTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, pdfW: num
   _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number, scale: number): void {
+function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
   const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
   const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
-  const w   = ann.thickness / scale;
-  const pad = w;
+  const pad = ann.thickness;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Line'),
     Rect:    [Math.min(x1,x2)-pad, Math.min(y1,y2)-pad, Math.max(x1,x2)+pad, Math.max(y1,y2)+pad],
     L:       [x1, y1, x2, y2],
-    BS:      pdfPage.doc.context.obj({ W: w }),
+    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     F:       PDFNumber.of(4),
   });
   _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addArrowAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number, scale: number): void {
+function _addArrowAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
   const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
   const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
-  const w   = ann.thickness / scale;
-  const pad = w * 5;
+  const pad = ann.thickness * 5;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Line'),
     Rect:    [Math.min(x1,x2)-pad, Math.min(y1,y2)-pad, Math.max(x1,x2)+pad, Math.max(y1,y2)+pad],
     L:       [x1, y1, x2, y2],
     LE:      [PDFName.of('None'), PDFName.of('OpenArrow')],
-    BS:      pdfPage.doc.context.obj({ W: w }),
+    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     F:       PDFNumber.of(4),
   });
   _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number, scale: number): void {
+function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
   const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
   const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
@@ -235,14 +231,14 @@ function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: numb
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Square'),
     Rect:    [Math.min(x1,x2), Math.min(y1,y2), Math.max(x1,x2), Math.max(y1,y2)],
-    BS:      pdfPage.doc.context.obj({ W: ann.thickness / scale }),
+    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     F:       PDFNumber.of(4),
   });
   _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number, scale: number): void {
+function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
   const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
   const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
@@ -250,7 +246,7 @@ function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: numb
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Circle'),
     Rect:    [Math.min(x1,x2), Math.min(y1,y2), Math.max(x1,x2), Math.max(y1,y2)],
-    BS:      pdfPage.doc.context.obj({ W: ann.thickness / scale }),
+    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     F:       PDFNumber.of(4),
   });
