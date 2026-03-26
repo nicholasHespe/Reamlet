@@ -1066,6 +1066,7 @@ async function _applyZoomNow(scale: number) {
   await v.setZoom(scale);
   activeTab.annotator!.pages = v.pages;
   activeTab.annotator!.redrawAll();
+  activeTab.annotator!.setTool(activeTab.annotator!.tool);
   _syncScrollbar();
   _updateHorizontalPadding();
   _syncScrollbarH();
@@ -1098,6 +1099,7 @@ async function rotate(singlePage: boolean) {
   else            await v.rotateAll(90);
   activeTab.annotator!.pages = v.pages;
   activeTab.annotator!.redrawAll();
+  activeTab.annotator!.setTool(activeTab.annotator!.tool);
   markDirty(activeTab);
 }
 
