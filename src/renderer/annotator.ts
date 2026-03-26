@@ -117,6 +117,38 @@ export class Annotator {
     this.pages.forEach((p, idx) => this._redrawPage(p, idx + 1));
   }
 
+  /**
+   * Transform stored annotation coordinates to match a 90° CW rotation applied
+   * to the given page (or all pages when pageNum is null).
+   * Must be called before redrawAll() / page re-render after rotation.
+   */
+  rotateAnnotations(pageNum: number | null, cwDegrees: number) {
+    const steps = (Math.round(cwDegrees / 90) % 4 + 4) % 4;
+    const targets = this.annotations.filter(a => pageNum === null || a.pageNum === pageNum);
+    for (let s = 0; s < steps; s++) {
+      for (const ann of targets) {
+        if (ann.type === 'draw' || ann.type === 'freeHighlight') {
+          ann.points = (ann.points as [number, number][]).map(([nx, ny]) => [1 - ny, nx]);
+        } else if (ann.type === 'highlight') {
+          ann.rects = ann.rects.map(r => ({
+            x: 1 - (r.y + r.height),
+            y: r.x,
+            width: r.height,
+            height: r.width,
+          }));
+        } else if (ann.type === 'text') {
+          const { x, y } = ann;
+          ann.x = 1 - y;
+          ann.y = x;
+        } else if (ann.type === 'line' || ann.type === 'arrow' || ann.type === 'rect' || ann.type === 'oval') {
+          const { x1, y1, x2, y2 } = ann;
+          ann.x1 = 1 - y1; ann.y1 = x1;
+          ann.x2 = 1 - y2; ann.y2 = x2;
+        }
+      }
+    }
+  }
+
   undo() {
     if (this._histIdx <= 0) return;
     this._histIdx--;
@@ -219,7 +251,7 @@ export class Annotator {
             pageNum:   fh.pageNum,
             points:    fh.points,
             color:     this.color,
-            thickness: 20,
+            thickness: 20 / (this.viewer?.scale ?? 1),
           });
           this._pushHistory();
         }
@@ -341,12 +373,13 @@ export class Annotator {
         this._drawing = false;
         if (this._currentPath && this._currentPath.points.length > 1) {
           const w = canvas.width, h = canvas.height;
+          const scale = this.viewer?.scale ?? 1;
           this.annotations.push({
             type:      'draw',
             pageNum,
             points:    this._currentPath.points.map(([x, y]) => [x / w, y / h]),
             color:     this._currentPath.color,
-            thickness: this._currentPath.thickness,
+            thickness: this._currentPath.thickness / scale,
           });
           this._pushHistory();
         }
@@ -358,12 +391,13 @@ export class Annotator {
         this._shapeStart = null;
         if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
           const w = canvas.width, h = canvas.height;
+          const scale = this.viewer?.scale ?? 1;
           this.annotations.push({
             type: this.tool as ShapeAnnotation['type'], pageNum,
             x1: x1 / w, y1: y1 / h,
             x2: x2 / w, y2: y2 / h,
             color:     this.color,
-            thickness: this.thickness,
+            thickness: this.thickness / scale,
           });
           this._pushHistory();
         }
@@ -399,12 +433,13 @@ export class Annotator {
       this._drawing = false;
       if (this._currentPath && this._currentPath.points.length > 1) {
         const w = canvas.width, h = canvas.height;
+        const scale = this.viewer?.scale ?? 1;
         this.annotations.push({
           type:      'draw',
           pageNum,
           points:    this._currentPath.points.map(([x, y]) => [x / w, y / h]),
           color:     this._currentPath.color,
-          thickness: this._currentPath.thickness,
+          thickness: this._currentPath.thickness / scale,
         });
         this._pushHistory();
       }
@@ -864,10 +899,11 @@ export class Annotator {
   }
 
   _drawAnnotation(ctx: CanvasRenderingContext2D, annot: Annotation, w: number, h: number) {
+    const scale = this.viewer?.scale ?? 1;
     ctx.save();
     if (annot.type === 'draw') {
       ctx.strokeStyle = annot.color;
-      ctx.lineWidth   = annot.thickness;
+      ctx.lineWidth   = annot.thickness * scale;
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';
       ctx.beginPath();
@@ -880,7 +916,7 @@ export class Annotator {
     } else if (annot.type === 'freeHighlight') {
       ctx.globalAlpha = 0.35;
       ctx.strokeStyle = annot.color;
-      ctx.lineWidth   = annot.thickness;
+      ctx.lineWidth   = annot.thickness * scale;
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';
       ctx.beginPath();
@@ -915,7 +951,7 @@ export class Annotator {
 
     } else if (annot.type === 'line' || annot.type === 'rect' || annot.type === 'oval' || annot.type === 'arrow') {
       ctx.strokeStyle = annot.color;
-      ctx.lineWidth   = annot.thickness;
+      ctx.lineWidth   = annot.thickness * scale;
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';
       this._drawShape(ctx, annot.type, annot.x1 * w, annot.y1 * h, annot.x2 * w, annot.y2 * h);
