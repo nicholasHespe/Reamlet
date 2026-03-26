@@ -86,15 +86,15 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
  * Rotation is the total display rotation (base PDF /Rotate + user rotation).
  * Formulas derived from inverting the PDF.js viewport transform:
  *   rot=0:   pdf = (nx·W,     (1-ny)·H)
- *   rot=90:  pdf = ((1-ny)·W, (1-nx)·H)
+ *   rot=90:  pdf = (ny·W,     nx·H)
  *   rot=180: pdf = ((1-nx)·W, ny·H)
- *   rot=270: pdf = (ny·W,     nx·H)
+ *   rot=270: pdf = ((1-ny)·W, (1-nx)·H)
  */
 function toPdfCoords(nx: number, ny: number, pdfW: number, pdfH: number, rot: number): [number, number] {
   switch ((rot || 0) % 360) {
-    case 90:  return [(1 - ny) * pdfW, (1 - nx) * pdfH];
+    case 90:  return [       ny * pdfW,        nx * pdfH];
     case 180: return [(1 - nx) * pdfW,        ny * pdfH];
-    case 270: return [       ny * pdfW,        nx * pdfH];
+    case 270: return [(1 - ny) * pdfW, (1 - nx) * pdfH];
     default:  return [       nx * pdfW, (1 - ny) * pdfH];
   }
 }
