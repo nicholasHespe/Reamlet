@@ -32,23 +32,40 @@ let previewZoom = 1.0;
 let printOrientation: 'portrait' | 'landscape' = 'portrait';
 
 const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+const ZOOM_MIN = ZOOM_STEPS[0];
+const ZOOM_MAX = ZOOM_STEPS[ZOOM_STEPS.length - 1];
 
 function setPreviewZoom(z: number) {
   previewZoom = z;
   zoomLabel.textContent = `${Math.round(z * 100)}%`;
-  const curIdx = ZOOM_STEPS.indexOf(z);
-  btnZoomOut.disabled = curIdx <= 0;
-  btnZoomIn.disabled  = curIdx >= ZOOM_STEPS.length - 1;
+  btnZoomOut.disabled = z <= ZOOM_MIN;
+  btnZoomIn.disabled  = z >= ZOOM_MAX;
   previewArea.style.zoom = String(z);
 }
 
+function fitToWidth() {
+  if (pageData.length === 0) return;
+  const padding   = 48; // 24px each side
+  const availW    = previewArea.clientWidth - padding;
+  const refW      = pageData[0].naturalW;
+  const refH      = pageData[0].naturalH;
+  const shortSide = Math.min(refW, refH);
+  const longSide  = Math.max(refW, refH);
+  const isBooklet = chkBooklet.checked;
+  const paperW    = isBooklet
+    ? (printOrientation === 'landscape' ? longSide : shortSide) * 2
+    : (printOrientation === 'landscape' ? longSide : shortSide);
+  const z = Math.min(Math.max(availW / paperW, ZOOM_MIN), ZOOM_MAX);
+  setPreviewZoom(Math.round(z * 1000) / 1000);
+}
+
 btnZoomOut.addEventListener('click', () => {
-  const curIdx = ZOOM_STEPS.indexOf(previewZoom);
-  if (curIdx > 0) setPreviewZoom(ZOOM_STEPS[curIdx - 1]);
+  const prev = [...ZOOM_STEPS].reverse().find(s => s < previewZoom - 0.001);
+  if (prev !== undefined) setPreviewZoom(prev);
 });
 btnZoomIn.addEventListener('click', () => {
-  const curIdx = ZOOM_STEPS.indexOf(previewZoom);
-  if (curIdx < ZOOM_STEPS.length - 1) setPreviewZoom(ZOOM_STEPS[curIdx + 1]);
+  const next = ZOOM_STEPS.find(s => s > previewZoom + 0.001);
+  if (next !== undefined) setPreviewZoom(next);
 });
 
 interface PageData {
@@ -267,6 +284,7 @@ document.querySelectorAll('input[name="color"]').forEach(el =>
 document.querySelectorAll('input[name="orientation"]').forEach(el =>
   el.addEventListener('change', () => {
     printOrientation = (document.querySelector('input[name="orientation"]:checked') as HTMLInputElement).value as 'portrait' | 'landscape';
+    fitToWidth();
     renderPreview();
   }));
 
@@ -275,9 +293,8 @@ btnClose.addEventListener('click', () => window.close());
 window.addEventListener('wheel', (e: WheelEvent) => {
   if (!e.ctrlKey) return;
   e.preventDefault();
-  const curIdx = ZOOM_STEPS.indexOf(previewZoom);
-  if (e.deltaY < 0 && curIdx < ZOOM_STEPS.length - 1) setPreviewZoom(ZOOM_STEPS[curIdx + 1]);
-  if (e.deltaY > 0 && curIdx > 0)                      setPreviewZoom(ZOOM_STEPS[curIdx - 1]);
+  if (e.deltaY < 0) { const next = ZOOM_STEPS.find(s => s > previewZoom + 0.001);            if (next !== undefined) setPreviewZoom(next); }
+  if (e.deltaY > 0) { const prev = [...ZOOM_STEPS].reverse().find(s => s < previewZoom - 0.001); if (prev !== undefined) setPreviewZoom(prev); }
 }, { passive: false });
 
 btnPrint.addEventListener('click', async () => {
@@ -357,5 +374,6 @@ window.api.onPdfData(async ({ buffer }) => {
   }
 
   statusEl.textContent = `${totalPages} page${totalPages === 1 ? '' : 's'}`;
+  fitToWidth();
   renderPreview();
 });
