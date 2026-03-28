@@ -999,6 +999,19 @@ async function printTab(tab: Tab | null) {
     await window.api.showMessageBox({ type: 'info', message: 'Save the document before printing.', buttons: ['OK'] });
     return;
   }
+  if (tab.dirty) {
+    const choice = await window.api.showMessageBox({
+      type: 'question',
+      message: 'Save before printing?',
+      detail: 'The document has unsaved annotations. Save now so they appear in the printed output.',
+      buttons: ['Save and Print', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (choice !== 0) return;
+    await saveTab(tab);
+    if (tab.dirty) return; // save was cancelled or failed
+  }
   await window.api.openPrintPreview(tab.filePath);
 }
 
