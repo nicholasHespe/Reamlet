@@ -1043,17 +1043,26 @@ function showDialog(options: {
     const footer = document.createElement('div');
     footer.className = 'modal-footer';
 
+    const controller = new AbortController();
+
     const dismiss = (idx: number) => {
-      document.removeEventListener('keydown', onKey);
-      document.body.removeChild(overlay);
+      controller.abort(); // removes the keydown listener
+      overlay.remove();
       resolve(idx);
     };
+
+    // Also clean up if the overlay is removed from the DOM by any other means
+    // (e.g. another piece of code clearing the body or closing the panel).
+    const observer = new MutationObserver(() => {
+      if (!overlay.isConnected) { controller.abort(); observer.disconnect(); resolve(cancelId); }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
 
     options.buttons.forEach((label, i) => {
       const btn = document.createElement('button');
       btn.className = 'modal-btn' + (i === defaultId ? ' primary' : '');
       btn.textContent = label;
-      btn.addEventListener('click', () => dismiss(i));
+      btn.addEventListener('click', () => { observer.disconnect(); dismiss(i); });
       footer.appendChild(btn);
     });
 
@@ -1061,8 +1070,8 @@ function showDialog(options: {
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') dismiss(cancelId); };
-    document.addEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { observer.disconnect(); dismiss(cancelId); } };
+    document.addEventListener('keydown', onKey, { signal: controller.signal });
   });
 }
 
