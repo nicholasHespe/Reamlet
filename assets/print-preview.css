@@ -96,7 +96,27 @@ details[open] summary { margin-bottom: 8px; }
   @page { margin: 0; size: auto; }
   #settings-panel { display: none !important; }
   body { display: block; overflow: visible; }
-  #preview-area { padding: 0; gap: 0; background: white; overflow: visible; }
-  .print-page { box-shadow: none; page-break-after: always; break-after: page; }
-  .print-page img { width: 100vw; height: 100vh; object-fit: contain; display: block; }
+  #preview-area { padding: 0; gap: 0; background: white; overflow: visible; display: block; }
+  /* Each page wrapper fills exactly one sheet of paper */
+  .print-page {
+    box-shadow: none;
+    page-break-after: always;
+    break-after: page;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+  }
+  /* Override inline px dimensions so the image scales to fit the paper.
+     !important is required to beat the inline style attribute. */
+  .print-page img {
+    width: auto !important;
+    height: auto !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    display: block;
+  }
 }
