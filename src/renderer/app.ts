@@ -1981,7 +1981,6 @@ async function _executeReorder() {
   pages.forEach(p => resultDoc.addPage(p));
   const bytes = await resultDoc.save();
 
-  _pushUndo(tab);
   tab.pdfBytes = bytes;
   tab.annotator!.clear();
   // Re-add loading overlay for the re-render
@@ -2106,7 +2105,6 @@ async function _executeFooter() {
   const tab   = activeTab;
   const bytes = await embedFooter(tab.pdfBytes, { left, center, right, fontSize });
 
-  _pushUndo(tab);
   tab.pdfBytes = bytes;
   tab.annotator!.clear();
   const reloadEl = document.createElement('div');
@@ -2196,7 +2194,6 @@ async function _executeWatermark() {
   const tab   = activeTab;
   const bytes = await embedWatermark(tab.pdfBytes, { text, fontSize, opacity, angle });
 
-  _pushUndo(tab);
   tab.pdfBytes = bytes;
   tab.annotator!.clear();
   const reloadEl = document.createElement('div');
