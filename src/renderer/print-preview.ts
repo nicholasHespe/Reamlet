@@ -73,7 +73,7 @@ interface PageData {
   naturalW: number;      // 1× CSS width (viewport.width / 1.5)
   naturalH: number;      // 1× CSS height
 }
-let pageData: PageData[] = []; // index 0 = page 1
+const pageData: PageData[] = []; // index 0 = page 1
 
 // ── Printers ──────────────────────────────────────────────────
 (async () => {
