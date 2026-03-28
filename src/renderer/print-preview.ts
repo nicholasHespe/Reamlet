@@ -74,6 +74,7 @@ interface PageData {
   naturalH: number;      // 1× CSS height
 }
 const pageData: PageData[] = []; // index 0 = page 1
+const failedPages: number[] = []; // 1-based page numbers that failed to render as PNG
 
 // ── Printers ──────────────────────────────────────────────────
 (async () => {
@@ -305,6 +306,12 @@ btnPrint.addEventListener('click', async () => {
   const duplexMode  = selDuplex.value as 'simplex' | 'longEdge' | 'shortEdge';
   const landscape   = chkBooklet.checked || printOrientation === 'landscape';
 
+  if (failedPages.length > 0) {
+    const n = failedPages.length;
+    const ok = confirm(`${n} page${n === 1 ? '' : 's'} (${failedPages.join(', ')}) failed to render and will print blank. Continue anyway?`);
+    if (!ok) return;
+  }
+
   btnPrint.disabled = true;
   statusEl.textContent = 'Printing…';
   try {
@@ -357,7 +364,7 @@ window.api.onPdfData(async ({ buffer }) => {
       const img      = new Image();
       await new Promise<void>(resolve => {
         img.onload  = () => resolve();
-        img.onerror = () => resolve(); // silently skip bad frames
+        img.onerror = () => { failedPages.push(pageNum); resolve(); };
         img.src = dataUrl;
       });
 
@@ -373,7 +380,11 @@ window.api.onPdfData(async ({ buffer }) => {
     return;
   }
 
-  statusEl.textContent = `${totalPages} page${totalPages === 1 ? '' : 's'}`;
+  if (failedPages.length > 0) {
+    statusEl.textContent = `${totalPages} page${totalPages === 1 ? '' : 's'} — warning: ${failedPages.length} page${failedPages.length === 1 ? '' : 's'} failed to render (pages ${failedPages.join(', ')}) and will print blank`;
+  } else {
+    statusEl.textContent = `${totalPages} page${totalPages === 1 ? '' : 's'}`;
+  }
   fitToWidth();
   renderPreview();
 });
