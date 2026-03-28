@@ -993,20 +993,77 @@ async function saveTabCopy(tab: Tab | null) {
   return false;
 }
 
+// ── Generic custom dialog ──────────────────────────────────────
+// Builds a modal matching the app's existing style and resolves with
+// the index of the button the user clicked (Escape resolves cancelId).
+function showDialog(options: {
+  title:     string;
+  message:   string;
+  buttons:   string[];
+  defaultId?: number;
+  cancelId?:  number;
+}): Promise<number> {
+  return new Promise(resolve => {
+    const cancelId  = options.cancelId  ?? options.buttons.length - 1;
+    const defaultId = options.defaultId ?? 0;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+
+    const box = document.createElement('div');
+    box.className = 'modal-box';
+    box.style.minWidth = '340px';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'modal-title';
+    titleEl.textContent = options.title;
+    box.appendChild(titleEl);
+
+    const msgEl = document.createElement('p');
+    msgEl.className = 'modal-hint';
+    msgEl.textContent = options.message;
+    box.appendChild(msgEl);
+
+    const footer = document.createElement('div');
+    footer.className = 'modal-footer';
+
+    const dismiss = (idx: number) => {
+      document.removeEventListener('keydown', onKey);
+      document.body.removeChild(overlay);
+      resolve(idx);
+    };
+
+    options.buttons.forEach((label, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'modal-btn' + (i === defaultId ? ' primary' : '');
+      btn.textContent = label;
+      btn.addEventListener('click', () => dismiss(i));
+      footer.appendChild(btn);
+    });
+
+    box.appendChild(footer);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') dismiss(cancelId); };
+    document.addEventListener('keydown', onKey);
+  });
+}
+
 async function printTab(tab: Tab | null) {
   if (!tab) return;
   if (!tab.filePath) {
-    await window.api.showMessageBox({ type: 'info', message: 'Save the document before printing.', buttons: ['OK'] });
+    await showDialog({ title: 'Print', message: 'Save the document before printing.', buttons: ['OK'], defaultId: 0, cancelId: 0 });
     return;
   }
   if (tab.dirty) {
-    const choice = await window.api.showMessageBox({
-      type: 'question',
-      message: 'Save before printing?',
-      detail: 'The document has unsaved annotations. Save now so they appear in the printed output.',
-      buttons: ['Save and Print', 'Cancel'],
+    const name   = tab.filePath.replace(/.*[\\/]/, '');
+    const choice = await showDialog({
+      title:     'Unsaved Changes',
+      message:   `"${name}" has unsaved annotations. Save now so they appear in the printed output.`,
+      buttons:   ['Save and Print', 'Cancel'],
       defaultId: 0,
-      cancelId: 1,
+      cancelId:  1,
     });
     if (choice !== 0) return;
     await saveTab(tab);
@@ -1623,13 +1680,12 @@ async function _executeCombine() {
       const name    = tab.filePath ? tab.filePath.replace(/.*[\\/]/, '') : 'Untitled';
       const hasPath = tab.filePath && /[\\/]/.test(tab.filePath);
       const buttons = ['Discard changes', ...(hasPath ? ['Save'] : []), 'Save As\u2026', 'Cancel'];
-      const choice  = await window.api.showMessageBox({
-        type:      'question',
+      const saveIdx = buttons.includes('Save') ? buttons.indexOf('Save') : buttons.indexOf('Save As\u2026');
+      const choice  = await showDialog({
         title:     'Unsaved Changes',
-        message:   `\u201c${name}\u201d has unsaved annotations.`,
-        detail:    'Choose how to handle them before combining.',
+        message:   `\u201c${name}\u201d has unsaved annotations. Choose how to handle them before combining.`,
         buttons,
-        defaultId: 0,
+        defaultId: saveIdx,
         cancelId:  buttons.indexOf('Cancel'),
       });
       const action = buttons[choice];
