@@ -1125,7 +1125,7 @@ const UNDO_LIMIT = 20;
 // Consecutive annotation-only entries share the same Uint8Array reference and
 // are counted only once, so annotation edits on large files remain cheap.
 const MAX_UNDO_BYTES = 200 * 1024 * 1024; // 200 MB
-let _undoing = false;
+const _undoing = new Set<number>(); // tab IDs currently in flight for undo/redo
 
 function _undoStackBytes(stack: Array<{ pdfBytes: Uint8Array; annotations: string }>): number {
   const seen = new Set<Uint8Array>();
@@ -1148,7 +1148,7 @@ function _shiftOldestUndo(tab: Tab): void {
 }
 
 function _pushUndo(tab: Tab): void {
-  if (_undoing) return;
+  if (_undoing.has(tab.id)) return;
   const annotations = tab.annotator ? JSON.stringify(tab.annotator.annotations) : '[]';
   if (!tab._undoStack) { tab._undoStack = []; tab._undoIdx = -1; }
   // Truncate forward history. If the clean state is in the discarded future, mark it unreachable.
@@ -1485,23 +1485,23 @@ document.querySelectorAll('.swatch').forEach(s => {
 });
 
 document.getElementById('btn-undo')!.addEventListener('click', async () => {
-  if (_undoing) return;
   const tab = activeTab;
-  if (!tab?._undoStack || (tab._undoIdx ?? -1) <= 0) return;
+  if (!tab || _undoing.has(tab.id)) return;
+  if (!tab._undoStack || (tab._undoIdx ?? -1) <= 0) return;
   const idx = tab._undoIdx!;
   tab._undoIdx = idx - 1;
-  _undoing = true;
-  try { await _applyUndo(tab, tab._undoStack[idx - 1]); } finally { _undoing = false; }
+  _undoing.add(tab.id);
+  try { await _applyUndo(tab, tab._undoStack[idx - 1]); } finally { _undoing.delete(tab.id); }
 });
 document.getElementById('btn-redo')!.addEventListener('click', async () => {
-  if (_undoing) return;
   const tab = activeTab;
-  if (!tab?._undoStack) return;
+  if (!tab || _undoing.has(tab.id)) return;
+  if (!tab._undoStack) return;
   const idx = tab._undoIdx ?? -1;
   if (idx >= tab._undoStack.length - 1) return;
   tab._undoIdx = idx + 1;
-  _undoing = true;
-  try { await _applyUndo(tab, tab._undoStack[idx + 1]); } finally { _undoing = false; }
+  _undoing.add(tab.id);
+  try { await _applyUndo(tab, tab._undoStack[idx + 1]); } finally { _undoing.delete(tab.id); }
 });
 document.getElementById('btn-fit')!.addEventListener('click',    fitWidth);
 document.getElementById('btn-fit-h')!.addEventListener('click',  fitHeight);
@@ -1562,25 +1562,25 @@ document.addEventListener('keydown', async (e) => {
 
   if (ctrl && e.key === 'z') {
     e.preventDefault();
-    if (_undoing) return;
     const tab = activeTab;
-    if (!tab?._undoStack || (tab._undoIdx ?? -1) <= 0) return;
+    if (!tab || _undoing.has(tab.id)) return;
+    if (!tab._undoStack || (tab._undoIdx ?? -1) <= 0) return;
     const idx = tab._undoIdx!;
     tab._undoIdx = idx - 1;
-    _undoing = true;
-    try { await _applyUndo(tab, tab._undoStack[idx - 1]); } finally { _undoing = false; }
+    _undoing.add(tab.id);
+    try { await _applyUndo(tab, tab._undoStack[idx - 1]); } finally { _undoing.delete(tab.id); }
     return;
   }
   if (ctrl && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) {
     e.preventDefault();
-    if (_undoing) return;
     const tab = activeTab;
-    if (!tab?._undoStack) return;
+    if (!tab || _undoing.has(tab.id)) return;
+    if (!tab._undoStack) return;
     const idx = tab._undoIdx ?? -1;
     if (idx >= tab._undoStack.length - 1) return;
     tab._undoIdx = idx + 1;
-    _undoing = true;
-    try { await _applyUndo(tab, tab._undoStack[idx + 1]); } finally { _undoing = false; }
+    _undoing.add(tab.id);
+    try { await _applyUndo(tab, tab._undoStack[idx + 1]); } finally { _undoing.delete(tab.id); }
     return;
   }
   if (ctrl && e.key === 'x') { e.preventDefault(); activeTab?.annotator?.cut(); return; }
