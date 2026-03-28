@@ -29,6 +29,7 @@ const zoomLabel      = document.getElementById('zoom-label')!;
 // ── State ─────────────────────────────────────────────────────
 let totalPages = 0;
 let previewZoom = 1.0;
+let printOrientation: 'portrait' | 'landscape' = 'portrait';
 
 const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
@@ -172,10 +173,13 @@ function buildComposite(pageSlots: number[], cols: number, targetW: number, targ
 }
 
 // ── Add a page wrapper to the preview ────────────────────────
-function addPreviewPage(imgEl: HTMLImageElement, displayW: number, displayH: number) {
-  imgEl.style.cssText = `width:${displayW}px; height:${displayH}px;`;
+// paperW/H are the paper dimensions; imgEl scales to fit inside.
+function addPreviewPage(imgEl: HTMLImageElement, paperW: number, paperH: number) {
+  imgEl.style.cssText = '';
   const wrapper = document.createElement('div');
   wrapper.className = 'print-page';
+  wrapper.style.width  = `${paperW}px`;
+  wrapper.style.height = `${paperH}px`;
   wrapper.appendChild(imgEl);
   previewArea.appendChild(wrapper);
 }
@@ -193,14 +197,20 @@ function renderPreview() {
   const refW = pageData[0].naturalW;
   const refH = pageData[0].naturalH;
 
+  // Paper dimensions: honour orientation toggle (booklet is always landscape)
+  const shortSide = Math.min(refW, refH);
+  const longSide  = Math.max(refW, refH);
+  const paperW = (isBooklet || printOrientation === 'landscape') ? longSide : shortSide;
+  const paperH = (isBooklet || printOrientation === 'landscape') ? shortSide : longSide;
+
   if (isBooklet) {
     // Booklet: always uses all pages; composites are landscape (2× wide)
     const sheets = getBookletOrder(totalPages);
     sheets.forEach(sheet => {
       (['front', 'back'] as const).forEach(side => {
         const [lp, rp] = sheet[side];
-        const img = buildComposite([lp, rp], 2, refW * 2, refH);
-        addPreviewPage(img, refW * 2, refH);
+        const img = buildComposite([lp, rp], 2, paperW * 2, paperH);
+        addPreviewPage(img, paperW * 2, paperH);
       });
     });
   } else if (pps > 1) {
@@ -215,17 +225,17 @@ function renderPreview() {
     for (let i = 0; i < visible.length; i += pps) {
       const chunk = visible.slice(i, i + pps);
       while (chunk.length < pps) chunk.push(0); // pad with blanks
-      const img = buildComposite(chunk, cols, refW, refH);
-      addPreviewPage(img, refW, refH);
+      const img = buildComposite(chunk, cols, paperW, paperH);
+      addPreviewPage(img, paperW, paperH);
     }
   } else {
-    // Single page per sheet
+    // Single page per sheet — show each page letterboxed on the selected paper size
     for (let p = 1; p <= totalPages; p++) {
       if (pageRange !== null && !pageRange.has(p)) continue;
-      const { img, naturalW, naturalH } = pageData[p - 1];
+      const { img } = pageData[p - 1];
       const clone = new Image();
       clone.src = img.src;
-      addPreviewPage(clone, naturalW, naturalH);
+      addPreviewPage(clone, paperW, paperH);
     }
   }
 
@@ -254,6 +264,11 @@ chkBooklet.addEventListener('change', () => {
 });
 document.querySelectorAll('input[name="color"]').forEach(el =>
   el.addEventListener('change', updateGreyscale));
+document.querySelectorAll('input[name="orientation"]').forEach(el =>
+  el.addEventListener('change', () => {
+    printOrientation = (document.querySelector('input[name="orientation"]:checked') as HTMLInputElement).value as 'portrait' | 'landscape';
+    renderPreview();
+  }));
 
 btnClose.addEventListener('click', () => window.close());
 
@@ -263,8 +278,7 @@ btnPrint.addEventListener('click', async () => {
   const scaleVal    = selScale.value;
   const scaleFactor = (scaleVal === 'fit' || scaleVal === '100') ? 100 : parseInt(scaleVal);
   const duplexMode  = selDuplex.value as 'simplex' | 'longEdge' | 'shortEdge';
-  // Orientation is handled per-page via CSS @page named pages; always default portrait here
-  const landscape   = false;
+  const landscape   = chkBooklet.checked || printOrientation === 'landscape';
 
   btnPrint.disabled = true;
   statusEl.textContent = 'Printing…';
