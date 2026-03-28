@@ -6,7 +6,7 @@
 import type { BrowserWindow as BW, NativeImage, IpcMainInvokeEvent, IpcMainEvent, Event as ElectronEvent } from 'electron';
 
 const { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, shell } = require('electron');
-const { exec, execFile } = require('child_process');
+const { execFile } = require('child_process');
 const path  = require('path');
 const fs    = require('fs');
 const os    = require('os');
@@ -237,9 +237,12 @@ ipcMain.handle('open-printer-preferences', async (event: IpcMainInvokeEvent, pri
   const printers = await event.sender.getPrintersAsync();
   const valid = printers.some((p: { name: string }) => p.name === printerName);
   if (!valid) return { ok: false, error: 'Unknown printer.' };
-  const safe = printerName.replace(/["]/g, '');
-  exec(`rundll32 printui.dll,PrintUIEntry /e /n "${safe}"`);
-  return { ok: true };
+  return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    execFile('rundll32', ['printui.dll,PrintUIEntry', '/e', '/n', printerName], (error: Error | null) => {
+      if (error) resolve({ ok: false, error: error.message });
+      else resolve({ ok: true });
+    });
+  });
 });
 
 // Open a visible print preview window where the user can configure and execute printing.
