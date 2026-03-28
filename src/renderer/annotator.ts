@@ -138,6 +138,11 @@ export class Annotator {
           const { x1, y1, x2, y2 } = ann;
           ann.x1 = 1 - y1; ann.y1 = x1;
           ann.x2 = 1 - y2; ann.y2 = x2;
+        } else {
+          // Runtime guard: if a new Annotation type is added without a
+          // corresponding branch here, warn rather than silently skip rotation
+          // and leave coordinates in an inconsistent state.
+          console.warn('rotateAnnotations: unhandled annotation type:', (ann as { type: unknown }).type);
         }
       }
     }
