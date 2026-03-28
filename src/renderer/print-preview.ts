@@ -179,7 +179,6 @@ function addPreviewPage(imgEl: HTMLImageElement, displayW: number, displayH: num
   imgEl.style.cssText = `width:${scaledW}px; height:${scaledH}px; max-width:100%;`;
   const wrapper = document.createElement('div');
   wrapper.className = 'print-page';
-  if (displayW > displayH) wrapper.classList.add('landscape');
   wrapper.appendChild(imgEl);
   previewArea.appendChild(wrapper);
 }

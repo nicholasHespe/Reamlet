@@ -122,18 +122,14 @@ details[open] summary { margin-bottom: 8px; }
 .greyscale .print-page img { filter: grayscale(1); }
 
 /* ── Print output ─────────────────────────────────────────────── */
-@page { margin: 0; size: portrait; }
-@page landscape-page { margin: 0; size: landscape; }
-
 @media print {
-  @page { margin: 0; size: portrait; }
+  @page { margin: 0; size: auto; }
   #settings-panel { display: none !important; }
   #preview-toolbar { display: none !important; }
   body { display: block; overflow: visible; }
   #preview-wrapper { display: block; overflow: visible; }
   #preview-area { padding: 0; gap: 0; background: white; overflow: visible; display: block; }
   /* Each page wrapper fills exactly one sheet of paper */
-  .print-page.landscape { page: landscape-page; }
   .print-page {
     box-shadow: none;
     page-break-after: always;
