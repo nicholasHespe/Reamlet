@@ -234,17 +234,27 @@ ipcMain.handle('reveal-in-explorer', (_event: IpcMainInvokeEvent, filePath: stri
   return { ok: true };
 });
 
-// Open the PDF file in a hidden Chromium window and invoke the system print dialog.
+// Open the PDF file in a Chromium window and invoke the system print dialog.
 // This bypasses the canvas renderer entirely so the output is always correct.
 ipcMain.handle('print-pdf', async (_event: IpcMainInvokeEvent, filePath: string): Promise<{ ok: boolean; error?: string }> => {
   if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: 'File not found.' };
 
   const printWin: BW = new BrowserWindow({
     show: false,
+    skipTaskbar: true,
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
 
   await printWin.loadURL('file:///' + filePath.replace(/\\/g, '/'));
+
+  // Chromium skips GPU compositing for windows that are never shown, producing blank
+  // print output. Show the window (without stealing focus) so the PDF viewer renders,
+  // then wait for the PDF title update which signals the viewer has finished loading.
+  printWin.showInactive();
+  await new Promise<void>(resolve => {
+    const tid = setTimeout(resolve, 3000);
+    printWin.webContents.once('page-title-updated', () => { clearTimeout(tid); resolve(); });
+  });
 
   return new Promise(resolve => {
     printWin.webContents.print({ silent: false }, (success: boolean, errorType: string) => {
