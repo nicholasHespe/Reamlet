@@ -272,6 +272,14 @@ document.querySelectorAll('input[name="orientation"]').forEach(el =>
 
 btnClose.addEventListener('click', () => window.close());
 
+window.addEventListener('wheel', (e: WheelEvent) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  const curIdx = ZOOM_STEPS.indexOf(previewZoom);
+  if (e.deltaY < 0 && curIdx < ZOOM_STEPS.length - 1) setPreviewZoom(ZOOM_STEPS[curIdx + 1]);
+  if (e.deltaY > 0 && curIdx > 0)                      setPreviewZoom(ZOOM_STEPS[curIdx - 1]);
+}, { passive: false });
+
 btnPrint.addEventListener('click', async () => {
   const copies      = Math.max(1, parseInt(inpCopies.value) || 1);
   const grey        = (document.querySelector('input[name="color"]:checked') as HTMLInputElement)?.value === 'grey';
