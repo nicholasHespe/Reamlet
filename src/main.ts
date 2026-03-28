@@ -124,16 +124,8 @@ ipcMain.handle('open-file-dialog', async (event: IpcMainInvokeEvent) => {
   }));
 });
 
-ipcMain.handle('save-file', async (event: IpcMainInvokeEvent, filePath: string, arrayBuffer: ArrayBuffer) => {
+ipcMain.handle('save-file', async (_event: IpcMainInvokeEvent, filePath: string, arrayBuffer: ArrayBuffer) => {
   if (!filePath) return { ok: false, error: 'no file path' };
-  const win = BrowserWindow.fromWebContents(event.sender);
-  const { response } = await dialog.showMessageBox(win, {
-    type: 'question', buttons: ['Replace', 'Cancel'],
-    defaultId: 0, cancelId: 1,
-    title: 'Save', message: `Replace "${path.basename(filePath)}"?`,
-    detail: 'The existing file will be overwritten with your annotated version.',
-  });
-  if (response !== 0) return { ok: false, error: 'cancelled' };
   try {
     fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
     return { ok: true };

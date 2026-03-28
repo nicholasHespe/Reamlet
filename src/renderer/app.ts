@@ -927,8 +927,17 @@ async function saveTab(tab: Tab | null) {
 
   const bytes = await embedAnnotations(tab.pdfBytes, annotations, viewer);
 
-  // Real on-disk file: overwrite after confirmation.
+  // Real on-disk file: confirm overwrite, then save.
   if (tab.filePath && /[\\/]/.test(tab.filePath)) {
+    const name   = tab.filePath.replace(/.*[\\/]/, '');
+    const choice = await showDialog({
+      title:     'Save',
+      message:   `Replace "${name}"?`,
+      buttons:   ['Replace', 'Cancel'],
+      defaultId: 0,
+      cancelId:  1,
+    });
+    if (choice !== 0) return false;
     const res = await window.api.saveFile(tab.filePath, bytes.buffer as ArrayBuffer);
     if (res.ok) {
       tab.pdfBytes     = bytes;
