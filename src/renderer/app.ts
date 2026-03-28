@@ -1314,6 +1314,51 @@ document.getElementById('btn-fit-h')!.addEventListener('click',  fitHeight);
 document.getElementById('btn-rotate')!.addEventListener('click', (e) => rotate(e.shiftKey));
 document.getElementById('btn-print')!.addEventListener('click',  () => window.print());
 
+// ── TEMPORARY PRINT DEBUG ──────────────────────────────────────
+{
+  const dbgEl = document.createElement('div');
+  dbgEl.id = 'print-debug-overlay';
+  dbgEl.style.cssText = 'display:none;position:fixed;top:0;left:0;background:yellow;color:black;font:12px monospace;padding:8px;z-index:9999;white-space:pre;';
+  document.body.appendChild(dbgEl);
+
+  window.addEventListener('beforeprint', () => {
+    const lines: string[] = [];
+    lines.push(`window inner: ${window.innerWidth}x${window.innerHeight}`);
+    lines.push(`devicePixelRatio: ${window.devicePixelRatio}`);
+
+    const wrappers = document.querySelectorAll<HTMLElement>('.page-wrapper');
+    lines.push(`page-wrapper count: ${wrappers.length}`);
+
+    wrappers.forEach((wrapper, i) => {
+      const cs = getComputedStyle(wrapper);
+      lines.push(`\nwrapper[${i}]:`);
+      lines.push(`  inline style: w=${wrapper.style.width} h=${wrapper.style.height}`);
+      lines.push(`  computed:     w=${cs.width} h=${cs.height}`);
+      lines.push(`  opacity: inline=${wrapper.style.opacity} computed=${cs.opacity}`);
+
+      wrapper.querySelectorAll<HTMLCanvasElement>('canvas').forEach((c, j) => {
+        const cc = getComputedStyle(c);
+        let hasContent = false;
+        try {
+          const px = c.getContext('2d')?.getImageData(c.width >> 1, c.height >> 1, 1, 1).data;
+          hasContent = !!px && px[3] > 0;
+        } catch { /* tainted or no context */ }
+        lines.push(`  canvas[${j}] .${c.className}: attr=${c.width}x${c.height} computed=${cc.width}x${cc.height} hasContent=${hasContent}`);
+      });
+    });
+
+    const text = lines.join('\n');
+    console.log('[PRINT DEBUG]\n' + text);
+    dbgEl.textContent = text;
+    dbgEl.style.display = 'block';
+  });
+
+  window.addEventListener('afterprint', () => {
+    dbgEl.style.display = 'none';
+  });
+}
+// ── END PRINT DEBUG ────────────────────────────────────────────
+
 btnBold.addEventListener('click', () => {
   if (!activeTab?.annotator) return;
   const next = !activeTab.annotator.textBold;

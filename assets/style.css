@@ -937,6 +937,7 @@ html, body {
   .form-layer   { display: none !important; }
   body { background: white; overflow: visible; }
   html { overflow: visible; }
+  #print-debug-overlay { display: block !important; position: static !important; }
 }
 
 /* ── Context menu ─────────────────────────────────────────────── */
