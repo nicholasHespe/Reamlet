@@ -6,12 +6,11 @@
 import type { BrowserWindow as BW, NativeImage, IpcMainInvokeEvent, IpcMainEvent, Event as ElectronEvent } from 'electron';
 
 const { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, shell } = require('electron');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const path  = require('path');
 const fs    = require('fs');
 const os    = require('os');
 const https = require('https');
-const http  = require('http');
 
 // ── Window factory ─────────────────────────────────────────────
 
@@ -206,6 +205,7 @@ ipcMain.handle('notify-tab-transferred', (_event: IpcMainInvokeEvent, sourceWind
 });
 
 ipcMain.on('open-devtools', (event: IpcMainEvent) => {
+  if (app.isPackaged) return;
   BrowserWindow.fromWebContents(event.sender)?.webContents.toggleDevTools();
 });
 
@@ -213,9 +213,8 @@ ipcMain.on('open-devtools', (event: IpcMainEvent) => {
 // into Windows Explorer, email clients, etc.
 ipcMain.handle('copy-file-to-clipboard', (_event: IpcMainInvokeEvent, filePath: string) => {
   const escaped = filePath.replace(/'/g, "''");
-  const cmd = `powershell -command "Set-Clipboard -Path '${escaped}'"`;
   return new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    exec(cmd, (error: Error | null) => {
+    execFile('powershell', ['-command', `Set-Clipboard -Path '${escaped}'`], (error: Error | null) => {
       if (error) resolve({ ok: false, error: error.message });
       else resolve({ ok: true });
     });
@@ -404,16 +403,16 @@ _cleanupTempDownloads();
 setInterval(_cleanupTempDownloads, 60 * 60 * 1000);
 
 // Download a remote PDF to %TEMP%\ReamletDownloads and return the local path.
-// Follows up to 5 redirects. Rejects on HTTP errors or network failures.
+// Only follows HTTPS redirects (no HTTP downgrade). Rejects on HTTP errors or network failures.
 function downloadPdfToTemp(url: string, redirectsLeft = 5): Promise<string> {
   return new Promise((resolve, reject) => {
     if (redirectsLeft <= 0) { reject(new Error('Too many redirects')); return; }
+    if (!url.startsWith('https://')) { reject(new Error('Only HTTPS URLs are supported')); return; }
 
     const tempDir = path.join(os.tmpdir(), 'ReamletDownloads');
     try { fs.mkdirSync(tempDir, { recursive: true }); } catch { /* already exists */ }
 
-    const protocol = url.startsWith('https://') ? https : http;
-    const req = protocol.get(url, (res: NodeJS.ReadableStream & { statusCode: number; headers: Record<string, string> }) => {
+    const req = https.get(url, (res: NodeJS.ReadableStream & { statusCode: number; headers: Record<string, string> }) => {
       if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) {
         const location = res.headers['location'];
         if (location) {
@@ -436,7 +435,25 @@ function downloadPdfToTemp(url: string, redirectsLeft = 5): Promise<string> {
       const filePath = path.join(tempDir, fileName);
       const fileStream = fs.createWriteStream(filePath);
       res.pipe(fileStream);
-      fileStream.on('finish', () => { fileStream.close(); resolve(filePath); });
+      fileStream.on('finish', () => {
+        fileStream.close();
+        // Verify the file starts with the PDF magic bytes (%PDF-)
+        try {
+          const header = Buffer.alloc(5);
+          const fd = fs.openSync(filePath, 'r');
+          fs.readSync(fd, header, 0, 5, 0);
+          fs.closeSync(fd);
+          if (header.toString('ascii') !== '%PDF-') {
+            fs.unlinkSync(filePath);
+            reject(new Error('Downloaded file is not a valid PDF'));
+            return;
+          }
+        } catch (err) {
+          reject(err);
+          return;
+        }
+        resolve(filePath);
+      });
       fileStream.on('error', reject);
     });
     req.on('error', reject);
