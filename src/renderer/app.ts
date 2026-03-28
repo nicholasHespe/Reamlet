@@ -999,7 +999,7 @@ async function printTab(tab: Tab | null) {
     await window.api.showMessageBox({ type: 'info', message: 'Save the document before printing.', buttons: ['OK'] });
     return;
   }
-  await window.api.printPdf(tab.filePath);
+  await window.api.openPrintPreview(tab.filePath);
 }
 
 async function reopenLastTab() {

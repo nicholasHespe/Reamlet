@@ -234,33 +234,43 @@ ipcMain.handle('reveal-in-explorer', (_event: IpcMainInvokeEvent, filePath: stri
   return { ok: true };
 });
 
-// Open the PDF file in a Chromium window and invoke the system print dialog.
-// This bypasses the canvas renderer entirely so the output is always correct.
-ipcMain.handle('print-pdf', async (_event: IpcMainInvokeEvent, filePath: string): Promise<{ ok: boolean; error?: string }> => {
+// Open a visible print preview window where the user can configure and execute printing.
+ipcMain.handle('open-print-preview', async (_event: IpcMainInvokeEvent, filePath: string): Promise<{ ok: boolean; error?: string }> => {
   if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: 'File not found.' };
 
-  const printWin: BW = new BrowserWindow({
+  const previewWin: BW = new BrowserWindow({
+    width: 960,
+    height: 700,
+    minWidth: 600,
+    minHeight: 400,
+    title: 'Print',
     show: false,
-    skipTaskbar: true,
-    webPreferences: { nodeIntegration: false, contextIsolation: true },
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
   });
 
-  await printWin.loadURL('file:///' + filePath.replace(/\\/g, '/'));
+  await previewWin.loadFile(path.join(__dirname, '..', 'renderer', 'print-preview.html'));
+  previewWin.show();
 
-  // Chromium skips GPU compositing for windows that are never shown, producing blank
-  // print output. Show the window (without stealing focus) so the PDF viewer renders,
-  // then wait for the PDF title update which signals the viewer has finished loading.
-  printWin.showInactive();
-  await new Promise<void>(resolve => {
-    const tid = setTimeout(resolve, 3000);
-    printWin.webContents.once('page-title-updated', () => { clearTimeout(tid); resolve(); });
-  });
+  const buffer = fs.readFileSync(filePath);
+  previewWin.webContents.send('pdf-data', { buffer: buffer.buffer });
+
+  return { ok: true };
+});
+
+// Execute the print dialog from the preview window's renderer process.
+ipcMain.handle('execute-print', (_event: IpcMainInvokeEvent, options: { copies: number; color: boolean; scaleFactor: number }): Promise<{ ok: boolean; error?: string }> => {
+  const win = BrowserWindow.fromWebContents(_event.sender);
+  if (!win) return Promise.resolve({ ok: false, error: 'No window.' });
 
   return new Promise(resolve => {
-    printWin.webContents.print({ silent: false }, (success: boolean, errorType: string) => {
-      printWin.destroy();
-      resolve(success ? { ok: true } : { ok: false, error: errorType });
-    });
+    win.webContents.print(
+      { silent: false, copies: options.copies, color: options.color, scaleFactor: options.scaleFactor },
+      (success: boolean, errorType: string) => resolve(success ? { ok: true } : { ok: false, error: errorType })
+    );
   });
 });
 
