@@ -1324,7 +1324,7 @@ async function fitWidth() {
   const v    = activeTab.viewer;
   const vp   = await v.getViewport(1);
   const tocW = tocPanel.classList.contains('hidden') ? 0 : tocPanel.offsetWidth;
-  const gap  = Math.round(screen.width * 0.02);
+  const gap  = Math.round(screen.width * 0.01);
   const availableW = activeTab.pane.clientWidth - sidebar.offsetWidth - tocW - 2 * gap;
   await _applyZoomNow(Math.round((availableW / (vp.width / v.scale)) * 100) / 100);
 }
