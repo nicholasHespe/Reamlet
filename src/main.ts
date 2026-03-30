@@ -311,6 +311,30 @@ function getManifestPath(): string {
   return path.join(path.dirname(process.execPath), 'com.reamlet.chromebridge.json');
 }
 
+// Persist user settings (e.g. extensionId) in userData so they survive reinstalls.
+function getUserDataSettingsPath(): string {
+  return path.join(app.getPath('userData'), 'settings.json');
+}
+function readUserDataSettings(): Record<string, unknown> {
+  try { return JSON.parse(fs.readFileSync(getUserDataSettingsPath(), 'utf8')); } catch { return {}; }
+}
+function writeUserDataSettings(settings: Record<string, unknown>): void {
+  fs.writeFileSync(getUserDataSettingsPath(), JSON.stringify(settings, null, 2) + '\n', 'utf8');
+}
+
+// Apply a saved extension ID to the manifest. Called on startup so reinstalls don't wipe the ID.
+function restoreExtensionIdToManifest(): void {
+  const settings = readUserDataSettings();
+  const id = settings.extensionId;
+  if (typeof id !== 'string' || !id) return;
+  try {
+    const p = getManifestPath();
+    const manifest = JSON.parse(fs.readFileSync(p, 'utf8'));
+    manifest.allowed_origins = [`chrome-extension://${id}/`];
+    fs.writeFileSync(p, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  } catch { /* manifest unwritable — ignore */ }
+}
+
 ipcMain.handle('get-extension-id', () => {
   try {
     const manifest = JSON.parse(fs.readFileSync(getManifestPath(), 'utf8'));
@@ -331,6 +355,9 @@ ipcMain.handle('set-extension-id', (_event: IpcMainInvokeEvent, id: string) => {
     const manifest = JSON.parse(fs.readFileSync(p, 'utf8'));
     manifest.allowed_origins = [`chrome-extension://${id}/`];
     fs.writeFileSync(p, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+    const settings = readUserDataSettings();
+    settings.extensionId = id;
+    writeUserDataSettings(settings);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
@@ -518,6 +545,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    restoreExtensionIdToManifest();
     const pendingTarget = _pendingOpenFile || getArgvTarget(process.argv);
     _pendingOpenFile = null;
     const openPath   = pendingTarget ? await resolveTarget(pendingTarget) : null;

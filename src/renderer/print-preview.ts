@@ -411,6 +411,12 @@ window.api.onPdfData(async ({ buffer }) => {
   } else {
     statusEl.textContent = `${totalPages} page${totalPages === 1 ? '' : 's'}`;
   }
+  // Default to landscape orientation if the first page is wider than tall
+  if (pageData.length > 0 && pageData[0].naturalW > pageData[0].naturalH) {
+    printOrientation = 'landscape';
+    (document.querySelector('input[name="orientation"][value="landscape"]') as HTMLInputElement).checked = true;
+  }
   fitToWidth();
   renderPreview();
+  btnPrint.focus();
 });
