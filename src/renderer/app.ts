@@ -1321,12 +1321,12 @@ async function _applyZoomNow(scale: number) {
 
 async function fitWidth() {
   if (!activeTab) return;
-  const v  = activeTab.viewer;
-  const vp = await v.getViewport(1);
-  const tocW       = tocPanel.classList.contains('hidden') ? 0 : tocPanel.offsetWidth;
-  const sbRight    = tocW + SCROLLBAR_GAP + 10; // scrollbar sits left of toc (10px wide) with gap
-  const availableW = activeTab.pane.clientWidth - 2 * Math.max(sidebar.offsetWidth, sbRight);
-  await _applyZoomNow(Math.round(((availableW - 32) / (vp.width / v.scale)) * 100) / 100);
+  const v    = activeTab.viewer;
+  const vp   = await v.getViewport(1);
+  const tocW = tocPanel.classList.contains('hidden') ? 0 : tocPanel.offsetWidth;
+  const gap  = Math.round(screen.width * 0.02);
+  const availableW = activeTab.pane.clientWidth - sidebar.offsetWidth - tocW - 2 * gap;
+  await _applyZoomNow(Math.round((availableW / (vp.width / v.scale)) * 100) / 100);
 }
 
 async function fitHeight() {
