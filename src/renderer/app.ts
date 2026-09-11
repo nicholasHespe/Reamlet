@@ -478,7 +478,12 @@ function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array): 
   const viewer   = new PDFViewer(pages);
   const pdfBytes = pdfData instanceof Uint8Array ? pdfData.slice() : new Uint8Array(pdfData);
 
-  const state = { id, filePath, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
+  const state: Tab = { id, filePath, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
+  // A deferred (off-screen) page render clears that page's annotation canvas as a
+  // side effect of resizing it — repaint from the live annotator so annotations
+  // don't disappear when a page scrolled off-screen during zoom/rotate comes back
+  // into view. state.annotator is looked up live since it's replaced on sleep/wake.
+  viewer.onPageRendered = (pageNum) => state.annotator?.redrawPage(pageNum);
   tabs.push(state);
   return state;
 }

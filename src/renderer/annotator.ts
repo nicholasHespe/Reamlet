@@ -111,6 +111,14 @@ export class Annotator {
     this.pages.forEach((p, idx) => this._redrawPage(p, idx + 1));
   }
 
+  // Redraw a single page's annotation overlay. Used to repaint a page whose
+  // annotCanvas was just cleared by a (re)render outside the annotator's control
+  // (e.g. PDFViewer.onPageRendered firing for a deferred off-screen page).
+  redrawPage(pageNum: number) {
+    const p = this.pages[pageNum - 1];
+    if (p) this._redrawPage(p, pageNum);
+  }
+
   /**
    * Transform stored annotation coordinates to match a 90° CW rotation applied
    * to the given page (or all pages when pageNum is null).

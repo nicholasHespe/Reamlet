@@ -30,6 +30,11 @@ const zoomLabel      = document.getElementById('zoom-label')!;
 let totalPages = 0;
 let previewZoom = 1.0;
 let printOrientation: 'portrait' | 'landscape' = 'portrait';
+// Physical size (PDF points, 1pt = 1/72in) of the sheet renderPreview() last laid
+// out — i.e. what one .print-page div actually represents. Booklet composites are
+// twice as wide as a single page. Used to size .print-page for printing and to
+// tell the OS printer the correct paper size (see btnPrint's click handler).
+let sheetWpt = 0, sheetHpt = 0;
 
 const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 const ZOOM_MIN = ZOOM_STEPS[0];
@@ -240,6 +245,8 @@ async function renderPreview() {
   const longSide  = Math.max(refW, refH);
   const paperW = (isBooklet || printOrientation === 'landscape') ? longSide : shortSide;
   const paperH = (isBooklet || printOrientation === 'landscape') ? shortSide : longSide;
+  sheetWpt = paperW * (isBooklet ? 2 : 1);
+  sheetHpt = paperH;
 
   if (isBooklet) {
     // Booklet: always uses all pages; composites are landscape (2× wide)
@@ -338,22 +345,47 @@ btnPrint.addEventListener('click', async () => {
     if (!ok) return;
   }
 
-  // Set @page orientation so 100vw/100vh resolve to the correct paper dimensions.
-  // Without this, Chromium uses the default portrait @page size and Electron's
-  // landscape:true just rotates the output, causing landscape pages to print at ~71%.
+  // Set @page to the sheet's exact physical size (in points) rather than just an
+  // orientation keyword. Chromium's print pipeline doesn't reliably derive page
+  // dimensions from 100vw/100vh (see .print-page in print-preview.css) or from a
+  // bare "size: portrait/landscape" keyword — both fall back to a default paper
+  // size that generally won't match the source PDF, which is what caused printed
+  // pages to come out at the wrong size and split across an extra blank page.
   let pageStyle = document.getElementById('reamlet-page-orientation') as HTMLStyleElement | null;
   if (!pageStyle) {
     pageStyle = document.createElement('style');
     pageStyle.id = 'reamlet-page-orientation';
     document.head.appendChild(pageStyle);
   }
-  pageStyle.textContent = `@page { size: ${landscape ? 'landscape' : 'portrait'}; margin: 0; }`;
+  pageStyle.textContent = `@page { size: ${sheetWpt}pt ${sheetHpt}pt; margin: 0; }`;
+  document.documentElement.style.setProperty('--print-page-w', `${sheetWpt}pt`);
+  document.documentElement.style.setProperty('--print-page-h', `${sheetHpt}pt`);
+
+  // Tell the OS printer the same physical size, in microns (1pt = 1/72in = 25400/72µm),
+  // so it doesn't fall back to its own default paper size for the actual print job.
+  const MICRONS_PER_POINT = 25400 / 72;
+  const pageSize = {
+    width:  Math.round(sheetWpt * MICRONS_PER_POINT),
+    height: Math.round(sheetHpt * MICRONS_PER_POINT),
+  };
+
+  // The on-screen preview scales #preview-area with a non-standard CSS `zoom`
+  // (see setPreviewZoom/fitToWidth). print-preview.css resets it to `zoom: normal`
+  // under @media print, but that reset isn't reliably honoured by the actual
+  // print/printToPDF compositor pass (unlike in a live DOM inspection) — so the
+  // printed page can end up laid out at the on-screen zoom factor instead of
+  // 100%, pushing content past the page boundary and spilling it onto an extra
+  // page. Clear it explicitly instead of depending on the cascade for print,
+  // and restore it afterward so the on-screen preview is unaffected.
+  const savedZoom = previewArea.style.zoom;
+  previewArea.style.zoom = '';
 
   btnPrint.disabled = true;
   statusEl.textContent = 'Printing…';
   try {
     const result = await window.api.executePrint({
       deviceName: selPrinter.value,
+      pageSize,
       copies,
       color:      !grey,
       collate:    chkCollate.checked,
@@ -370,6 +402,8 @@ btnPrint.addEventListener('click', async () => {
     statusEl.textContent = `Print error: ${(err as Error).message}`;
     btnPrint.disabled = false;
     return;
+  } finally {
+    previewArea.style.zoom = savedZoom;
   }
   window.close();
 });
