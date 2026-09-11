@@ -49,6 +49,7 @@ export class PDFViewer {
   _io: IntersectionObserver | null;
   _pageSizeCache: Record<number, { width: number; height: number }>;
   isSleeping: boolean;
+  onPageRendered?: (pageNum: number) => void;
 
   /**
    * @param {HTMLElement} container  - .pdf-pages element to render pages into
@@ -66,6 +67,10 @@ export class PDFViewer {
     this._io               = null;  // IntersectionObserver for deferred renders
     this._pageSizeCache    = {}; // pageNum → { width, height } in native (unrotated) PDF pts — survives sleep
     this.isSleeping        = false;
+    // Notified after _renderPage() resizes (and thus clears) a page's annotCanvas —
+    // callers that overlay annotations on top of the PDF canvas must redraw the page
+    // that finished rendering, since the annotation canvas has no content of its own.
+    this.onPageRendered    = undefined;
   }
 
   // Returns the total rotation (PDF base + user) for a page, 0/90/180/270
@@ -483,6 +488,10 @@ export class PDFViewer {
 
     // Render interactive form field overlays
     await this._renderFormFields(pageNum, page, viewport, this.pages[idx]);
+
+    // annotCanvas was just resized above, which clears its bitmap — repaint
+    // whatever annotation overlay the caller maintains for this page.
+    this.onPageRendered?.(pageNum);
   }
 
   // ── Form field overlay ──────────────────────────────────────
