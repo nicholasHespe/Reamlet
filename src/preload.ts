@@ -76,6 +76,7 @@ contextBridge.exposeInMainWorld('api', {
     duplexMode:  'simplex' | 'longEdge' | 'shortEdge';
     scaleFactor: number;
     landscape:   boolean;
+    pageSize:    { width: number; height: number }; // microns
   }) => ipcRenderer.invoke('execute-print', options),
 
   // Initiate a native OS file drag (for dragging into Outlook, Explorer, etc.)

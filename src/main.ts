@@ -283,6 +283,7 @@ ipcMain.handle('execute-print', (_event: IpcMainInvokeEvent, options: {
   duplexMode:  'simplex' | 'longEdge' | 'shortEdge';
   scaleFactor: number;
   landscape:   boolean;
+  pageSize:    { width: number; height: number }; // microns
 }): Promise<{ ok: boolean; error?: string }> => {
   const win = BrowserWindow.fromWebContents(_event.sender);
   if (!win) return Promise.resolve({ ok: false, error: 'No window.' });
@@ -298,6 +299,11 @@ ipcMain.handle('execute-print', (_event: IpcMainInvokeEvent, options: {
         duplexMode:  options.duplexMode,
         scaleFactor: options.scaleFactor,
         landscape:   options.landscape,
+        // Without an explicit pageSize the printer's own default paper size is
+        // used (often mismatched with the source PDF), and the print-preview
+        // page content — sized in physical units to match — can end up taller
+        // than the printer's chosen page, spilling onto an extra blank page.
+        pageSize:    options.pageSize,
       },
       (success: boolean, errorType: string) =>
         resolve(success ? { ok: true } : { ok: false, error: errorType })

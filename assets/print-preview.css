@@ -137,14 +137,20 @@ details[open] summary { margin-bottom: 8px; }
   body { display: block; overflow: visible; }
   #preview-wrapper { display: block; overflow: visible; }
   #preview-area { padding: 0; gap: 0; background: white; overflow: visible; display: block; zoom: normal; }
-  /* Each page wrapper fills exactly one sheet of paper.
+  /* Each page wrapper fills exactly one sheet of paper. Sized in physical units
+     (points, set as CSS custom properties by print-preview.ts right before
+     printing) rather than 100vw/100vh: viewport units do not reliably resolve
+     to the actual paginated page box in Chromium's print/printToPDF pipeline,
+     so a 100vh-tall box can end up taller than the real printable page and
+     spill its content onto a spurious extra page. The vw/vh fallback only
+     applies if JS hasn't set the custom properties yet (e.g. before load).
      !important is required to beat the inline style.width/height set by JS. */
   .print-page {
     box-shadow: none;
     page-break-after: always;
     break-after: page;
-    width: 100vw !important;
-    height: 100vh !important;
+    width: var(--print-page-w, 100vw) !important;
+    height: var(--print-page-h, 100vh) !important;
     overflow: hidden;
     display: flex;
     align-items: center;

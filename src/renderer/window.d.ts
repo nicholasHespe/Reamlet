@@ -29,6 +29,7 @@ interface Window {
       duplexMode:  'simplex' | 'longEdge' | 'shortEdge';
       scaleFactor: number;
       landscape:   boolean;
+      pageSize:    { width: number; height: number }; // microns
     }) => Promise<{ ok: boolean; error?: string }>;
     startDrag: (filePath: string) => void;
     setUiZoom: (factor: number) => void;
