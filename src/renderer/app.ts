@@ -105,6 +105,23 @@ if (isMac) {
   });
 }
 
+// ── Theme (Light / Dark / System Default) ───────────────────────
+
+function _applyTheme(data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) {
+  document.documentElement.dataset.theme = data.effective;
+  document.querySelectorAll('button[data-theme-choice]').forEach(btn => {
+    btn.classList.toggle('active', (btn as HTMLElement).dataset.themeChoice === data.mode);
+  });
+}
+
+window.api.getTheme().then(_applyTheme);
+window.api.onThemeUpdated(_applyTheme);
+
+async function _setTheme(mode: 'light' | 'dark' | 'system') {
+  const result = await window.api.setTheme(mode);
+  if (result.ok) _applyTheme(await window.api.getTheme());
+}
+
 // ── Find bar ───────────────────────────────────────────────────
 
 const finder = new FindBar({
@@ -837,7 +854,7 @@ function _sleepCheck() {
   sorted.forEach((tab, i) => {
     if (tab.sleeping || tab === activeTab || !tab.annotator) return;
     const tooOld = (now - (tab.lastActive || 0)) > SLEEP_AFTER_MS;
-    if (i >= SLEEP_KEEP_RECENT || tooOld) _sleepTab(tab);
+    if (i >= SLEEP_KEEP_RECENT && tooOld) _sleepTab(tab);
   });
 }
 
@@ -1658,6 +1675,9 @@ const _menuActions = {
   'fit-height':  () => fitHeight(),
   'devtools':    () => window.api.openDevTools(),
   'app-reload':  () => location.reload(),
+  'theme-light':  () => _setTheme('light'),
+  'theme-dark':   () => _setTheme('dark'),
+  'theme-system': () => _setTheme('system'),
 };
 
 function _closeAllDropdowns() {
@@ -1704,6 +1724,9 @@ window.api.onMenuEvent((event) => {
     case 'menu-close-tab':    if (activeTab) requestCloseTab(activeTab); break;
     case 'menu-reopen-tab':   reopenLastTab(); break;
     case 'menu-extension-id': _openExtensionIdModal(); break;
+    case 'menu-theme-light':  _setTheme('light'); break;
+    case 'menu-theme-dark':   _setTheme('dark'); break;
+    case 'menu-theme-system': _setTheme('system'); break;
   }
 });
 
