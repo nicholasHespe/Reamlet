@@ -862,7 +862,14 @@ setInterval(_sleepCheck, 15_000);
 
 // ── Tab content loader (async; shows spinner until done) ────────
 
-async function _loadTabContent(tab: Tab) {
+// preserveView keeps the current zoom and scroll position instead of fitting to
+// width — used when reloading a document the user is already reading (e.g. after
+// a save), where snapping the view would be jarring.
+async function _loadTabContent(tab: Tab, preserveView = false) {
+  const scrollTop = preserveView ? tab.pane.scrollTop : 0;
+  // Reloading replaces the annotator; without this the old one keeps its
+  // document-level mouse/key listeners attached for the life of the window.
+  tab.annotator?.destroy();
   try {
     await tab.viewer.load(tab.pdfBytes);
     tab.annotator = new Annotator(tab.viewer.pages, tab.viewer);
@@ -890,8 +897,21 @@ async function _loadTabContent(tab: Tab) {
     _syncScrollbar();
     _positionScrollbarH();
     tab._notBeenViewed = false;
-    await fitWidth();
+    if (preserveView) requestAnimationFrame(() => { tab.pane.scrollTop = scrollTop; });
+    else await fitWidth();
   }
+}
+
+// A successful save bakes the annotations into the file, so the in-memory overlay
+// is now a duplicate of what the document itself contains. Reload from the saved
+// bytes and drop the overlay: the user sees exactly what was written, and a second
+// save can't embed the same annotations a second time.
+async function _reloadAfterSave(tab: Tab) {
+  finder.invalidateTab(tab);
+  await _loadTabContent(tab, true);
+  tab._undoCleanIdx = tab._undoIdx ?? null;
+  tab.dirty = false;
+  renderTabBar();
 }
 
 // ── Open / Save ────────────────────────────────────────────────
@@ -968,9 +988,7 @@ async function saveTab(tab: Tab | null) {
     if (res.ok) {
       tab.pdfBytes       = bytes;
       tab._savedBytes    = null;
-      tab._undoCleanIdx  = tab._undoIdx ?? null;
-      tab.dirty          = false;
-      renderTabBar();
+      await _reloadAfterSave(tab);
       return true;
     } else if (res.error && res.error !== 'cancelled') {
       alert('Save failed: ' + res.error);
@@ -989,9 +1007,7 @@ async function saveTab(tab: Tab | null) {
     tab._suggestedName = null;
     tab.pdfBytes       = bytes;
     tab._savedBytes    = null;
-    tab._undoCleanIdx  = tab._undoIdx ?? null;
-    tab.dirty          = false;
-    renderTabBar();
+    await _reloadAfterSave(tab);
     updateTitleBar(tab);
     return true;
   }
@@ -1022,9 +1038,7 @@ async function saveTabCopy(tab: Tab | null) {
     tab._suggestedDir  = null;
     tab._suggestedName = null;
     tab.pdfBytes       = bytes;
-    tab._undoCleanIdx  = tab._undoIdx ?? null;
-    tab.dirty          = false;
-    renderTabBar();
+    await _reloadAfterSave(tab);
     updateTitleBar(tab);
     return true;
   }

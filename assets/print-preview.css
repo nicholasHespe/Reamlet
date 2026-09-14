@@ -166,4 +166,27 @@ details[open] summary { margin-bottom: 8px; }
     max-height: 100% !important;
     display: block;
   }
+
+  /* Landscape sheets are printed by rotating the page ourselves onto portrait
+     paper, rather than asking the driver to do it. Chromium drops the print
+     option's `landscape` flag whenever the page carries an @page rule — which
+     this one does, to pin the page size — so the driver may never learn it was
+     meant to rotate, and a landscape-sized layout then runs off the side of a
+     portrait sheet. Rotating here keeps the printed result correct regardless.
+
+     The image is constrained to the sheet as laid out (landscape: long side
+     across) and rotated about the centre of the paper, so the two axes swap
+     into the portrait page box exactly. It is positioned rather than a flex
+     item so flex-shrink can't resize it before the rotation applies. */
+  .print-page.rotate-sheet { position: relative; }
+  .print-page.rotate-sheet img {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    max-width:  var(--print-sheet-w) !important;
+    max-height: var(--print-sheet-h) !important;
+    /* -90deg puts the top of the page along the left edge of the paper, so the
+       sheet is turned clockwise to read it — the way printers lay out landscape. */
+    transform: translate(-50%, -50%) rotate(-90deg);
+  }
 }
