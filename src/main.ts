@@ -5,7 +5,7 @@
 
 import type { BrowserWindow as BW, NativeImage, IpcMainInvokeEvent, IpcMainEvent, Event as ElectronEvent } from 'electron';
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, nativeTheme, shell } = require('electron');
 const { execFile } = require('child_process');
 const path  = require('path');
 const fs    = require('fs');
@@ -25,7 +25,7 @@ function createWindow(openFilePath: string | null, showInactive = false): BW {
     minHeight: 480,
     title: 'Reamlet',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
-    backgroundColor: '#1e1e1e',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1e1e1e' : '#ffffff',
     // Mac: use native traffic lights with hidden titlebar; Windows: fully custom frame
     ...(isMac
       ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 12, y: 13 } }
@@ -90,6 +90,15 @@ function buildMenu(): void {
     {
       label: 'View',
       submenu: [
+        {
+          label: 'Theme',
+          submenu: [
+            { label: 'Light',           type: 'radio', checked: nativeTheme.themeSource === 'light',  click: () => fw()?.webContents.send('menu-theme-light') },
+            { label: 'Dark',            type: 'radio', checked: nativeTheme.themeSource === 'dark',   click: () => fw()?.webContents.send('menu-theme-dark') },
+            { label: 'System Default',  type: 'radio', checked: nativeTheme.themeSource === 'system', click: () => fw()?.webContents.send('menu-theme-system') },
+          ],
+        },
+        { type: 'separator' },
         { role: 'toggleDevTools' },
         { role: 'reload' },
       ],
@@ -370,6 +379,44 @@ ipcMain.handle('set-extension-id', (_event: IpcMainInvokeEvent, id: string) => {
   }
 });
 
+// ── Theme (Light / Dark / System Default) ───────────────────────
+
+type ThemeMode = 'light' | 'dark' | 'system';
+
+// Apply the saved theme preference (defaults to 'system') to nativeTheme.
+// Called on startup, before any window is created, so the first paint is already correct.
+function restoreThemeSource(): void {
+  const settings = readUserDataSettings();
+  const mode = settings.themeMode;
+  nativeTheme.themeSource = (mode === 'light' || mode === 'dark') ? mode : 'system';
+}
+
+function effectiveTheme(): 'light' | 'dark' {
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+ipcMain.handle('get-theme', () => ({
+  mode:      nativeTheme.themeSource as ThemeMode,
+  effective: effectiveTheme(),
+}));
+
+ipcMain.handle('set-theme', (_event: IpcMainInvokeEvent, mode: ThemeMode) => {
+  if (mode !== 'light' && mode !== 'dark' && mode !== 'system') return { ok: false, error: 'Invalid theme mode.' };
+  nativeTheme.themeSource = mode;
+  const settings = readUserDataSettings();
+  settings.themeMode = mode;
+  writeUserDataSettings(settings);
+  return { ok: true };
+});
+
+// Fires whenever themeSource changes (our own calls above, or the OS theme when mode is 'system').
+// Broadcast to every window and rebuild the app menu so its radio checkmarks stay in sync.
+nativeTheme.on('updated', () => {
+  const payload = { mode: nativeTheme.themeSource as ThemeMode, effective: effectiveTheme() };
+  BrowserWindow.getAllWindows().forEach((w: BW) => w.webContents.send('theme-updated', payload));
+  buildMenu();
+});
+
 // Initiate a native OS file drag so external apps (Outlook, Explorer, etc.) can receive the file.
 // Must be ipcMain.on (synchronous) — startDrag() must be called in the same tick as the IPC event.
 ipcMain.on('start-drag', (event: IpcMainEvent, filePath: string) => {
@@ -552,6 +599,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     restoreExtensionIdToManifest();
+    restoreThemeSource();
     const pendingTarget = _pendingOpenFile || getArgvTarget(process.argv);
     _pendingOpenFile = null;
     const openPath   = pendingTarget ? await resolveTarget(pendingTarget) : null;

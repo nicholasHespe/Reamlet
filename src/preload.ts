@@ -39,9 +39,17 @@ contextBridge.exposeInMainWorld('api', {
   // Write a new extension ID to the native messaging manifest
   setExtensionId: (id: string) => ipcRenderer.invoke('set-extension-id', id),
 
+  // Theme (Light / Dark / System Default)
+  getTheme: () => ipcRenderer.invoke('get-theme'),
+  setTheme: (mode: 'light' | 'dark' | 'system') => ipcRenderer.invoke('set-theme', mode),
+  onThemeUpdated: (callback: (data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => void) => {
+    ipcRenderer.on('theme-updated', (_e: unknown, data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => callback(data));
+  },
+
   // Subscribe to menu events
   onMenuEvent: (callback: (event: string) => void) => {
-    ['menu-open', 'menu-save', 'menu-save-copy', 'menu-print', 'menu-close-tab', 'menu-reopen-tab', 'menu-extension-id']
+    ['menu-open', 'menu-save', 'menu-save-copy', 'menu-print', 'menu-close-tab', 'menu-reopen-tab', 'menu-extension-id',
+     'menu-theme-light', 'menu-theme-dark', 'menu-theme-system']
       .forEach(ev => ipcRenderer.on(ev, () => callback(ev)));
   },
 
