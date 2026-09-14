@@ -5,6 +5,28 @@
 import type { PDFViewer, PageData } from './viewer.js';
 import type { Annotation, ShapeAnnotation, HighlightAnnotation, TextAnnotation } from './types.js';
 
+// ── Text layout — shared with saver.ts ──────────────────────────
+// All values are in PDF points (1/72"), the same unit an unscaled page uses.
+// The canvas overlay multiplies them by the viewer scale; the saver writes them
+// into the page as-is. Keeping one definition is what makes a text annotation
+// land on the same baseline on screen and in the saved file at any zoom level.
+
+/** Vertical gap between lines, and between a baseline and its underline. */
+export const TEXT_LINE_GAP = 2;
+
+/** Font stack whose metrics match the PDF's Helvetica (Arial is metric-compatible). */
+export const TEXT_FONT_STACK = 'Helvetica, Arial, sans-serif';
+
+/** Distance from the annotation's anchor y down to the baseline of line `lineIndex`. */
+export function textBaselineOffset(fontSize: number, lineIndex: number): number {
+  return lineIndex * (fontSize + TEXT_LINE_GAP) + fontSize / 2 + TEXT_LINE_GAP;
+}
+
+/** Thickness of the underline rule drawn under a line of text. */
+export function textUnderlineThickness(fontSize: number): number {
+  return fontSize / 12;
+}
+
 export class Annotator {
   pages: PageData[];
   viewer: PDFViewer | null;
@@ -654,7 +676,7 @@ export class Annotator {
       height:          ${fontSize + 8}px;
       background:      transparent;
       border:          1px dashed rgba(128,128,128,0.6);
-      font:            ${weight} ${fontSize}px system-ui, sans-serif;
+      font:            ${weight} ${fontSize}px ${TEXT_FONT_STACK};
       color:           ${color};
       text-decoration: ${decor};
       line-height:     ${fontSize + 2}px;
@@ -720,7 +742,7 @@ export class Annotator {
       const scale = this.viewer?.scale ?? 1;
       const fs    = a.fontSize * scale;
       const lines = a.text.split('\n');
-      const lineH = (fs + 2) / h;
+      const lineH = (fs + TEXT_LINE_GAP * scale) / h;
       const totalH = lineH * lines.length;
       const longestChars = Math.max(...lines.map(l => l.length), 1);
       const textW = longestChars * fs * 0.6 / w;
@@ -934,14 +956,18 @@ export class Annotator {
       const fs     = annot.fontSize * scale;
       const weight = annot.bold ? 'bold ' : '';
       ctx.fillStyle = annot.color;
-      ctx.font      = `${weight}${fs}px system-ui, sans-serif`;
+      ctx.font      = `${weight}${fs}px ${TEXT_FONT_STACK}`;
       annot.text.split('\n').forEach((line: string, i: number) => {
         const x = annot.x * w;
-        const y = annot.y * h + i * (fs + 2) + fs / 2 + 2;
+        // Offsets are in points and scaled here, so a line keeps the same
+        // position on the page at every zoom level — and the same position
+        // saver.ts writes it to in the saved PDF.
+        const y = annot.y * h + textBaselineOffset(annot.fontSize, i) * scale;
         ctx.fillText(line, x, y);
         if (annot.underline) {
           const metrics = ctx.measureText(line);
-          ctx.fillRect(x, y + 2, metrics.width, Math.max(1, fs / 12));
+          ctx.fillRect(x, y + TEXT_LINE_GAP * scale, metrics.width,
+                       Math.max(1, textUnderlineThickness(annot.fontSize) * scale));
         }
       });
 

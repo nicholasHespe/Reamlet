@@ -7,13 +7,18 @@ import * as _pdfLib from '../../node_modules/pdf-lib/dist/pdf-lib.esm.js';
 import type * as PDFLibNS from 'pdf-lib';
 import type { Annotation, DrawAnnotation, HighlightAnnotation, TextAnnotation, ShapeAnnotation } from './types.js';
 import type { PDFViewer } from './viewer.js';
+import { TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness } from './annotator.js';
 
 // Cast the direct-path runtime import to the pdf-lib type surface
-const { PDFDocument, PDFName, PDFArray, PDFNumber, PDFString, degrees, rgb, StandardFonts } =
+const { PDFDocument, PDFName, PDFArray, PDFNumber, degrees, rgb, StandardFonts } =
   _pdfLib as unknown as typeof PDFLibNS;
 
 type PDFDoc  = import('pdf-lib').PDFDocument;
 type PDFPage = import('pdf-lib').PDFPage;
+type PDFFont = import('pdf-lib').PDFFont;
+
+/** Helvetica + Helvetica-Bold, embedded once per document and shared by every text annotation. */
+interface TextFonts { regular: PDFFont; bold: PDFFont }
 
 /**
  * Embed annotations into a PDF and return the modified bytes.
@@ -45,6 +50,17 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
     } catch { /* PDF has no AcroForm — ignore */ }
   }
 
+  // Text is drawn into the page content stream (not left to a viewer-generated
+  // annotation appearance), so the fonts must be embedded up front. Only do it
+  // when there is text to draw, to avoid touching documents that have none.
+  let textFonts: TextFonts | null = null;
+  if (annotations.some(a => a.type === 'text')) {
+    textFonts = {
+      regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
+      bold:    await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+    };
+  }
+
   for (let pageIdx = 0; pageIdx < pdfDoc.getPageCount(); pageIdx++) {
     const pageNum = pageIdx + 1;
     const pdfPage: PDFPage = pdfDoc.getPage(pageIdx);
@@ -66,7 +82,7 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
       if      (ann.type === 'draw')          _addInkAnnotation      (pdfPage, ann,           pdfW, pdfH, totalRot);
       else if (ann.type === 'freeHighlight') _addInkAnnotation      (pdfPage, ann,           pdfW, pdfH, totalRot);
       else if (ann.type === 'highlight')     _addHighlightAnnotation(pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'text')          _addFreeTextAnnotation (pdfPage, ann,           pdfW, pdfH, totalRot);
+      else if (ann.type === 'text')          _drawTextAnnotation    (pdfPage, ann,           pdfW, pdfH, totalRot, textFonts!);
       else if (ann.type === 'line')          _addLineAnnotation     (pdfPage, ann,           pdfW, pdfH, totalRot);
       else if (ann.type === 'arrow')         _addArrowAnnotation    (pdfPage, ann,           pdfW, pdfH, totalRot);
       else if (ann.type === 'rect')          _addSquareAnnotation   (pdfPage, ann,           pdfW, pdfH, totalRot);
@@ -169,23 +185,71 @@ function _addHighlightAnnotation(pdfPage: PDFPage, ann: HighlightAnnotation, pdf
   }
 }
 
-function _addFreeTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, pdfW: number, pdfH: number, rot: number): void {
+/**
+ * Draw a text annotation into the page's content stream, one line at a time, at
+ * exactly the baselines the canvas overlay used (see annotator.ts's shared
+ * textBaselineOffset).
+ *
+ * This deliberately does not emit a FreeText annotation. A FreeText without an
+ * appearance stream is laid out by whichever viewer opens the file — it gets
+ * top-aligned inside its /Rect with viewer-chosen padding, wrapped to the /Rect
+ * width, and rendered in the single font named by /DA. That is why saved text
+ * used to land below and right of where it was placed, lost its bold and
+ * underline, and wrapped once a line grew past the box. Drawing the glyphs
+ * ourselves is what makes the saved file match the screen.
+ */
+function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, pdfW: number, pdfH: number, rot: number, fonts: TextFonts): void {
   const { r, g, b } = hexToRgb01(ann.color);
-  const [px, py] = toPdfCoords(ann.x, ann.y, pdfW, pdfH, rot);
-  const boxH = ann.fontSize * 2 + 4;
+  const color = rgb(r, g, b);
+  const font  = ann.bold ? fonts.bold : fonts.regular;
+  const size  = ann.fontSize;
 
-  const da = `${r.toFixed(2)} ${g.toFixed(2)} ${b.toFixed(2)} rg /Helvetica ${ann.fontSize} Tf`;
+  // Height of the page as displayed, which is what the annotation's normalised
+  // y is a fraction of — width and height swap for quarter turns.
+  const displayH = (rot % 180 === 0) ? pdfH : pdfW;
 
-  const annotDict = pdfPage.doc.context.obj({
-    Type:     PDFName.of('Annot'),
-    Subtype:  PDFName.of('FreeText'),
-    Rect:     [px, py - boxH, px + 200, py],
-    Contents: PDFString.of(ann.text),
-    DA:       PDFString.of(da),
-    F:        PDFNumber.of(4),
+  ann.text.split('\n').forEach((line, i) => {
+    if (!line) return;
+    const baselineFromTop = textBaselineOffset(size, i);
+    const [x, y] = toPdfCoords(ann.x, ann.y + baselineFromTop / displayH, pdfW, pdfH, rot);
+
+    // A page displayed with /Rotate R turns its content R° clockwise, so the
+    // text has to be turned R° counter-clockwise to come out upright.
+    _drawTextSafely(pdfPage, line, { x, y, size, font, color, rotate: degrees(rot) });
+
+    if (ann.underline) {
+      const thickness = textUnderlineThickness(size);
+      const [ux, uy] = toPdfCoords(
+        ann.x,
+        ann.y + (baselineFromTop + TEXT_LINE_GAP + thickness) / displayH,
+        pdfW, pdfH, rot,
+      );
+      pdfPage.drawRectangle({
+        x: ux, y: uy,
+        width:  font.widthOfTextAtSize(line, size),
+        height: thickness,
+        color,
+        rotate: degrees(rot),
+      });
+    }
   });
+}
 
-  _appendAnnotation(pdfPage, annotDict);
+/**
+ * Helvetica can only encode WinAnsi characters. Rather than fail the whole save
+ * on one stray glyph, fall back to a sanitised line so the rest of the text —
+ * and every other annotation in the document — still gets written.
+ */
+function _drawTextSafely(pdfPage: PDFPage, line: string, options: Parameters<PDFPage['drawText']>[1]): void {
+  try {
+    pdfPage.drawText(line, options);
+  } catch {
+    const font = options!.font!;
+    const safe = [...line]
+      .map(ch => { try { font.encodeText(ch); return ch; } catch { return '?'; } })
+      .join('');
+    try { pdfPage.drawText(safe, options); } catch { /* give up on this line */ }
+  }
 }
 
 function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
@@ -227,10 +291,13 @@ function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: numb
   const { r, g, b } = hexToRgb01(ann.color);
   const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
   const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
+  // A Square's border is drawn inside its /Rect, whereas the canvas centres the
+  // stroke on the path — grow the rect by half the stroke so both line up.
+  const pad = ann.thickness / 2;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Square'),
-    Rect:    [Math.min(x1,x2), Math.min(y1,y2), Math.max(x1,x2), Math.max(y1,y2)],
+    Rect:    [Math.min(x1,x2) - pad, Math.min(y1,y2) - pad, Math.max(x1,x2) + pad, Math.max(y1,y2) + pad],
     BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     F:       PDFNumber.of(4),
@@ -242,10 +309,12 @@ function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: numb
   const { r, g, b } = hexToRgb01(ann.color);
   const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
   const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
+  // As with Square: the ellipse border is inset into its /Rect, so pad it out.
+  const pad = ann.thickness / 2;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Circle'),
-    Rect:    [Math.min(x1,x2), Math.min(y1,y2), Math.max(x1,x2), Math.max(y1,y2)],
+    Rect:    [Math.min(x1,x2) - pad, Math.min(y1,y2) - pad, Math.max(x1,x2) + pad, Math.max(y1,y2) + pad],
     BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     F:       PDFNumber.of(4),
