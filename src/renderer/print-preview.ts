@@ -209,6 +209,9 @@ function addPreviewPage(imgEl: HTMLImageElement, paperW: number, paperH: number)
   imgEl.style.cssText = '';
   const wrapper = document.createElement('div');
   wrapper.className = 'print-page';
+  // A sheet wider than it is tall gets rotated onto portrait paper at print
+  // time — see .rotate-sheet in print-preview.css. On screen it stays as-is.
+  if (paperW > paperH) wrapper.classList.add('rotate-sheet');
   wrapper.style.width  = `${paperW}px`;
   wrapper.style.height = `${paperH}px`;
   wrapper.appendChild(imgEl);
@@ -331,9 +334,9 @@ btnPrint.addEventListener('click', async () => {
   const scaleVal    = selScale.value;
   const scaleFactor = (scaleVal === 'fit' || scaleVal === '100') ? 100 : parseInt(scaleVal);
   const duplexMode  = selDuplex.value as 'simplex' | 'longEdge' | 'shortEdge';
-  // Derive orientation from the sheet renderPreview() actually laid out, so the
-  // flag sent to the driver can never disagree with the @page box below.
-  const landscape   = sheetWpt > sheetHpt;
+  // Always false: the page is rotated onto portrait paper here rather than by
+  // the driver, so asking the driver to rotate as well would undo it.
+  const landscape   = false;
 
   if (parsePageRange(inpPages.value) === false) {
     inpPages.setCustomValidity('No pages match this range.');
@@ -359,21 +362,26 @@ btnPrint.addEventListener('click', async () => {
     pageStyle.id = 'reamlet-page-orientation';
     document.head.appendChild(pageStyle);
   }
-  pageStyle.textContent = `@page { size: ${sheetWpt}pt ${sheetHpt}pt; margin: 0; }`;
-  document.documentElement.style.setProperty('--print-page-w', `${sheetWpt}pt`);
-  document.documentElement.style.setProperty('--print-page-h', `${sheetHpt}pt`);
-
-  // Tell the OS printer the same physical sheet, in microns (1pt = 1/72in = 25400/72µm),
-  // so it doesn't fall back to its own default paper size for the actual print job.
-  //
-  // Paper is always described in portrait form and rotated by the `landscape`
-  // flag — that's how printers stock it. Sending an already-rotated custom size
-  // (297x210mm for landscape A4) asks for paper the driver doesn't have, so it
-  // silently falls back to its default portrait sheet while the page is still
-  // laid out landscape, and the overhang is cut off the side of the printout.
-  const MICRONS_PER_POINT = 25400 / 72;
+  // Paper is always portrait — the size printers actually stock. A landscape
+  // sheet is printed by rotating the page into that portrait box ourselves (see
+  // .rotate-sheet in print-preview.css), because Chromium drops the print
+  // option's `landscape` flag for any page carrying an @page rule, so the driver
+  // can't be relied on to rotate. Asking for a pre-rotated custom size instead
+  // (297x210mm for landscape A4) gets silently swapped for the driver's default
+  // portrait sheet, leaving a landscape layout hanging off the paper's edge.
   const mediaWpt = Math.min(sheetWpt, sheetHpt);
   const mediaHpt = Math.max(sheetWpt, sheetHpt);
+
+  pageStyle.textContent = `@page { size: ${mediaWpt}pt ${mediaHpt}pt; margin: 0; }`;
+  document.documentElement.style.setProperty('--print-page-w', `${mediaWpt}pt`);
+  document.documentElement.style.setProperty('--print-page-h', `${mediaHpt}pt`);
+  // The sheet as laid out, which the rotated page is sized against.
+  document.documentElement.style.setProperty('--print-sheet-w', `${sheetWpt}pt`);
+  document.documentElement.style.setProperty('--print-sheet-h', `${sheetHpt}pt`);
+
+  // Same sheet for the OS printer, in microns (1pt = 1/72in = 25400/72µm), so it
+  // doesn't fall back to its own default paper size for the actual print job.
+  const MICRONS_PER_POINT = 25400 / 72;
   const pageSize = {
     width:  Math.round(mediaWpt * MICRONS_PER_POINT),
     height: Math.round(mediaHpt * MICRONS_PER_POINT),
