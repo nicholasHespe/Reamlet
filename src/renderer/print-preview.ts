@@ -331,7 +331,9 @@ btnPrint.addEventListener('click', async () => {
   const scaleVal    = selScale.value;
   const scaleFactor = (scaleVal === 'fit' || scaleVal === '100') ? 100 : parseInt(scaleVal);
   const duplexMode  = selDuplex.value as 'simplex' | 'longEdge' | 'shortEdge';
-  const landscape   = chkBooklet.checked || printOrientation === 'landscape';
+  // Derive orientation from the sheet renderPreview() actually laid out, so the
+  // flag sent to the driver can never disagree with the @page box below.
+  const landscape   = sheetWpt > sheetHpt;
 
   if (parsePageRange(inpPages.value) === false) {
     inpPages.setCustomValidity('No pages match this range.');
@@ -361,12 +363,20 @@ btnPrint.addEventListener('click', async () => {
   document.documentElement.style.setProperty('--print-page-w', `${sheetWpt}pt`);
   document.documentElement.style.setProperty('--print-page-h', `${sheetHpt}pt`);
 
-  // Tell the OS printer the same physical size, in microns (1pt = 1/72in = 25400/72µm),
+  // Tell the OS printer the same physical sheet, in microns (1pt = 1/72in = 25400/72µm),
   // so it doesn't fall back to its own default paper size for the actual print job.
+  //
+  // Paper is always described in portrait form and rotated by the `landscape`
+  // flag — that's how printers stock it. Sending an already-rotated custom size
+  // (297x210mm for landscape A4) asks for paper the driver doesn't have, so it
+  // silently falls back to its default portrait sheet while the page is still
+  // laid out landscape, and the overhang is cut off the side of the printout.
   const MICRONS_PER_POINT = 25400 / 72;
+  const mediaWpt = Math.min(sheetWpt, sheetHpt);
+  const mediaHpt = Math.max(sheetWpt, sheetHpt);
   const pageSize = {
-    width:  Math.round(sheetWpt * MICRONS_PER_POINT),
-    height: Math.round(sheetHpt * MICRONS_PER_POINT),
+    width:  Math.round(mediaWpt * MICRONS_PER_POINT),
+    height: Math.round(mediaHpt * MICRONS_PER_POINT),
   };
 
   // The on-screen preview scales #preview-area with a non-standard CSS `zoom`
