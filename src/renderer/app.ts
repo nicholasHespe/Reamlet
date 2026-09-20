@@ -90,6 +90,8 @@ const colorPanel     = document.getElementById('color-panel')!;
 const titleFilename  = document.getElementById('title-filename')!;
 const contextMenu    = document.getElementById('context-menu')!;
 const inputCtxMenu   = document.getElementById('input-ctx-menu')!;
+const editableCtxMenu = document.getElementById('editable-ctx-menu')!;
+const spellSuggestions = document.getElementById('spell-suggestions')!;
 const ctxCut         = document.querySelector('[data-ctx="cut"]')   as HTMLButtonElement;
 const ctxPaste       = document.querySelector('[data-ctx="paste"]') as HTMLButtonElement;
 const tabContextMenu = document.getElementById('tab-context-menu')!;
@@ -285,6 +287,11 @@ function _hideTabContextMenu() {
 
 viewerHost.addEventListener('contextmenu', (e) => {
   if (!activeTab) return;
+  // A right-click inside a text field wants the editing menu, with the spelling
+  // candidates only the main process can supply. Preventing the default here
+  // would also suppress the main-process context-menu event that carries them,
+  // so this press is left alone and answered over IPC instead.
+  if ((e.target as Element)?.closest('textarea, input, [contenteditable="true"]')) return;
   e.preventDefault();
 
   // Show Cut only when a cuttable annotation is selected; Paste when clipboard has content
@@ -308,6 +315,7 @@ document.addEventListener('mousedown', (e) => {
   if (!(e.target as Element)?.closest('#context-menu'))     _hideContextMenu();
   if (!(e.target as Element)?.closest('#tab-context-menu')) _hideTabContextMenu();
   if (!(e.target as Element)?.closest('#input-ctx-menu'))   inputCtxMenu.classList.add('hidden');
+  if (!(e.target as Element)?.closest('#editable-ctx-menu')) editableCtxMenu.classList.add('hidden');
 });
 
 contextMenu.addEventListener('mousedown', (e) => {
@@ -331,6 +339,59 @@ contextMenu.addEventListener('mousedown', (e) => {
       finder.open();
       break;
     }
+  }
+});
+
+// ── Editable-field context menu (spelling suggestions + editing) ─
+
+let _misspelledWord = '';
+
+window.api.onEditableContextMenu((data) => {
+  _misspelledWord = data.misspelledWord;
+
+  // Rebuild the candidate list. An empty one means either a correctly spelled
+  // word or no dictionary loaded for the current language; either way there is
+  // nothing to offer, so the spelling part of the menu is left out entirely.
+  spellSuggestions.replaceChildren(...data.suggestions.map(word => {
+    const btn = document.createElement('button');
+    btn.dataset.editCtx = 'replace';
+    btn.dataset.word    = word;
+    btn.textContent     = word;
+    return btn;
+  }));
+
+  const hasWord = data.misspelledWord !== '';
+  editableCtxMenu.querySelector<HTMLElement>('[data-edit-ctx="add-to-dictionary"]')!
+    .style.display = hasWord ? '' : 'none';
+  editableCtxMenu.querySelector<HTMLElement>('[data-spell-sep]')!
+    .style.display = hasWord ? '' : 'none';
+
+  for (const [cmd, allowed] of [['cut', data.canCut], ['copy', data.canCopy], ['paste', data.canPaste]] as const) {
+    (editableCtxMenu.querySelector(`[data-edit-ctx="${cmd}"]`) as HTMLButtonElement).disabled = !allowed;
+  }
+
+  _hideContextMenu();
+  editableCtxMenu.classList.remove('hidden');
+  const menuW = editableCtxMenu.offsetWidth  || 160;
+  const menuH = editableCtxMenu.offsetHeight || 120;
+  editableCtxMenu.style.left = `${Math.max(0, Math.min(data.x, window.innerWidth  - menuW - 4))}px`;
+  editableCtxMenu.style.top  = `${Math.max(0, Math.min(data.y, window.innerHeight - menuH - 4))}px`;
+});
+
+// mousedown rather than click, with the default prevented, so the field keeps
+// focus: the annotation textarea commits and removes itself on blur, and the
+// edit commands below all act on whatever is focused.
+editableCtxMenu.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const btn = (e.target as Element)?.closest('[data-edit-ctx]') as HTMLElement | null;
+  if (!btn) return;
+  editableCtxMenu.classList.add('hidden');
+  switch (btn.dataset.editCtx) {
+    case 'replace':           window.api.replaceMisspelling(btn.dataset.word ?? ''); break;
+    case 'add-to-dictionary': window.api.addToDictionary(_misspelledWord);           break;
+    case 'cut':               window.api.editableCommand('cut');                     break;
+    case 'copy':              window.api.editableCommand('copy');                    break;
+    case 'paste':             window.api.editableCommand('paste');                   break;
   }
 });
 

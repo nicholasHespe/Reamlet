@@ -504,6 +504,17 @@
     <button data-input-ctx="paste">Paste</button>
   </div>
 
+  <!-- ── Editable-field context menu (spelling + editing) ──────── -->
+  <!-- Suggestions are injected at #spell-suggestions; the rest is static. -->
+  <div id="editable-ctx-menu" class="hidden">
+    <div id="spell-suggestions"></div>
+    <button data-edit-ctx="add-to-dictionary">Add to Dictionary</button>
+    <div class="ctx-sep" data-spell-sep></div>
+    <button data-edit-ctx="cut">Cut</button>
+    <button data-edit-ctx="copy">Copy</button>
+    <button data-edit-ctx="paste">Paste</button>
+  </div>
+
   <!-- ── Tab context menu ──────────────────────────────────────── -->
   <div id="tab-context-menu" class="hidden">
     <button data-tctx="close">Close</button>

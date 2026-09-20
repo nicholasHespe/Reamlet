@@ -5,6 +5,16 @@
 
 import type { MessageBoxOptions } from 'electron';
 
+interface EditableContextMenuData {
+  x: number;
+  y: number;
+  misspelledWord: string;
+  suggestions: string[];
+  canCut: boolean;
+  canCopy: boolean;
+  canPaste: boolean;
+}
+
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
@@ -45,6 +55,16 @@ contextBridge.exposeInMainWorld('api', {
   onThemeUpdated: (callback: (data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => void) => {
     ipcRenderer.on('theme-updated', (_e: unknown, data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => callback(data));
   },
+
+  // Spell-check + editing context menu for text fields.
+  // Only the main process is told which word is misspelled and what to offer
+  // instead, so it pushes that here when a right-click lands on an editable.
+  onEditableContextMenu: (callback: (data: EditableContextMenuData) => void) => {
+    ipcRenderer.on('editable-context-menu', (_e: unknown, data: EditableContextMenuData) => callback(data));
+  },
+  replaceMisspelling: (word: string) => ipcRenderer.send('replace-misspelling', word),
+  addToDictionary:    (word: string) => ipcRenderer.send('add-to-dictionary', word),
+  editableCommand:    (command: 'cut' | 'copy' | 'paste') => ipcRenderer.send('editable-edit', command),
 
   // Subscribe to menu events
   onMenuEvent: (callback: (event: string) => void) => {
