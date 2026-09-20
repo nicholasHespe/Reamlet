@@ -99,10 +99,6 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
 /**
  * The visible box of a pdf-lib page — the CropBox clipped to the MediaBox, with
  * either box's corners normalised in case they were written the other way round.
- *
- * embedFooter/embedWatermark have no viewer to ask, and pdf-lib's getSize()
- * reports the MediaBox, so anything positioned from it drifts off the visible
- * area on a page that is cropped or whose MediaBox does not start at the origin.
  */
 function visibleBox(page: PDFPage): PageBox {
   const norm = (b: { x: number; y: number; width: number; height: number }) => ({

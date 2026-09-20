@@ -1,11 +1,6 @@
-// Reamlet — regression tests for annotation placement in saved PDFs.
-//
-// Every annotation is stored as a fraction of the page *as displayed*. Saving
-// has to turn that back into a point in the page's own user space, which means
-// honouring the displayed box's size AND its lower-left corner. Pages whose
-// MediaBox does not start at the origin, or that carry an inset CropBox, are
-// the cases that catch a transform which assumes (0, 0).
-//
+// Reamlet — tests for annotation placement in saved PDFs, across page
+// geometries (offset MediaBox, inset CropBox, rotation) and every annotation
+// type.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import test from 'node:test';
@@ -160,8 +155,6 @@ test('a user rotation applied in the viewer is honoured when saving', async () =
 });
 
 test('an annotation spanning the whole screen covers the whole visible page', async () => {
-  // The clearest statement of the bug this guards: on a cropped page, a full-page
-  // stroke used to be written against the MediaBox and ended up short and offset.
   const src = await makePdf({ media: [0, 0, 612, 792], crop: [50, 60, 562, 732] });
   const ann = { type: 'rect', pageNum: 1, x1: 0, y1: 0, x2: 1, y2: 1,
                 color: '#ff0000', thickness: 0 };

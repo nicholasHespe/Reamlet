@@ -9,13 +9,7 @@ import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 const STANDARD_FONT_DATA_URL =
   fileURLToPath(new URL('../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url));
 
-/**
- * Build a single-page PDF with an explicit MediaBox / CropBox / Rotate.
- *
- * The geometries here are the ones that used to be mishandled: a MediaBox whose
- * origin is not (0, 0), and a CropBox inset into the MediaBox. Both are common
- * in files produced by imposition and trimming tools.
- */
+/** Build a single-page PDF with an explicit MediaBox / CropBox / Rotate. */
 export async function makePdf({ media, crop, rotate }) {
   const doc  = await PDFDocument.create();
   const page = doc.addPage([Math.abs(media[2] - media[0]), Math.abs(media[3] - media[1])]);
