@@ -475,7 +475,7 @@ document.addEventListener('mouseup', () => {
 
 let _nextTabId = 1;
 
-function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array): Tab {
+function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array, sourceUrl: string | null = null): Tab {
   const id = _nextTabId++;
 
   const pane  = document.createElement('div');
@@ -495,7 +495,7 @@ function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array): 
   const viewer   = new PDFViewer(pages);
   const pdfBytes = pdfData instanceof Uint8Array ? pdfData.slice() : new Uint8Array(pdfData);
 
-  const state: Tab = { id, filePath, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
+  const state: Tab = { id, filePath, sourceUrl, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
   // A deferred (off-screen) page render clears that page's annotation canvas as a
   // side effect of resizing it — repaint from the live annotator so annotations
   // don't disappear when a page scrolled off-screen during zoom/rotate comes back
@@ -916,11 +916,42 @@ async function _reloadAfterSave(tab: Tab) {
 
 // ── Open / Save ────────────────────────────────────────────────
 
-// Return an already-open tab for the given absolute file path, or null.
-// Used to avoid opening duplicate tabs for the same file.
-function _findOpenTab(filePath: string | null) {
+// Whether re-opening a document that already has a tab switches to it instead
+// of opening a duplicate. Loaded once at startup; kept here rather than read
+// fresh on every open so the check stays synchronous with the rest of the
+// open flow.
+let _reuseOpenTab = true;
+window.api.getReuseTabSetting().then(({ enabled }) => {
+  _reuseOpenTab = enabled;
+  _syncReuseTabMenu();
+});
+
+function _syncReuseTabMenu() {
+  document.querySelectorAll('[data-toggle="reuse-tab"]').forEach(btn => {
+    btn.classList.toggle('active', _reuseOpenTab);
+  });
+}
+
+async function _toggleReuseTab() {
+  _reuseOpenTab = !_reuseOpenTab;
+  _syncReuseTabMenu();
+  await window.api.setReuseTabSetting(_reuseOpenTab);
+}
+
+// Return an already-open tab for the given document, or null. A tab counts as
+// "the same document" by its local path, or — for one opened from the web,
+// where every download lands at a freshly randomised temp path — by the URL
+// it came from. A tab the user has since edited is excluded: it no longer
+// reflects what re-opening the document would show, so it is better to open a
+// second, unmodified copy than to jump to a tab that is not the file on disk.
+function _findOpenTab(filePath: string | null, sourceUrl: string | null = null) {
+  if (!_reuseOpenTab) return null;
+  if (sourceUrl) {
+    const bySource = tabs.find(t => t.sourceUrl === sourceUrl && !t.dirty);
+    if (bySource) return bySource;
+  }
   if (!filePath || !/[\\/]/.test(filePath)) return null;
-  return tabs.find(t => t.filePath === filePath) ?? null;
+  return tabs.find(t => t.filePath === filePath && !t.dirty) ?? null;
 }
 
 async function openFile() {
@@ -1692,6 +1723,7 @@ const _menuActions = {
   'theme-light':  () => _setTheme('light'),
   'theme-dark':   () => _setTheme('dark'),
   'theme-system': () => _setTheme('system'),
+  'toggle-reuse-tab': () => _toggleReuseTab(),
 };
 
 function _closeAllDropdowns() {
@@ -1809,11 +1841,13 @@ inputCtxMenu.addEventListener('mousedown', (e) => {
   }
 });
 
-// Receive file data when this window was opened for a dragged-out tab
-window.api.onOpenFileData(async ({ filePath, buffer }) => {
-  const existing = _findOpenTab(filePath);
+// Receive file data when this window was opened for a dragged-out tab, or when
+// a file/URL is forwarded here — a second launch, macOS's Open With, or a
+// document intercepted by the browser extension.
+window.api.onOpenFileData(async ({ filePath, buffer, sourceUrl }) => {
+  const existing = _findOpenTab(filePath, sourceUrl);
   if (existing) { switchTab(existing); return; }
-  const tab = createTab(filePath, buffer);
+  const tab = createTab(filePath, buffer, sourceUrl);
   renderTabBar();
   switchTab(tab);
   await _loadTabContent(tab);

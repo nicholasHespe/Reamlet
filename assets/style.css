@@ -236,10 +236,13 @@ html, body {
 }
 .tdrop-submenu:hover .tdrop-submenu-panel { display: block; }
 
-/* Checkmark on the active choice in a radio-style submenu (e.g. Theme) */
+/* Checkmark on the active choice in a radio-style submenu (e.g. Theme), and on
+   any checked on/off toggle in a dropdown (e.g. "Switch to Already-Open Tab") */
 .tdrop-submenu-panel button[data-theme-choice] { justify-content: flex-start; gap: 8px; }
+.titlebar-dropdown button[data-toggle] { justify-content: flex-start; gap: 8px; }
 .tdrop-check { display: inline-block; width: 10px; flex-shrink: 0; }
-button[data-theme-choice].active .tdrop-check::before { content: '\2713'; }
+button[data-theme-choice].active .tdrop-check::before,
+button[data-toggle].active .tdrop-check::before { content: '\2713'; }
 
 /* ── Top bar ────────────────────────────────────────────────── */
 #topbar {

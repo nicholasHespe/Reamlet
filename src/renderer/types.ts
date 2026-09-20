@@ -68,6 +68,11 @@ interface FindCacheEntry {
 export interface Tab {
   id: number;
   filePath: string | null;
+  /** Origin URL for a document opened from the web (native messaging, a browser
+   *  download); null for a document opened from local disk. Downloaded PDFs land
+   *  at a freshly randomised temp path every time, so this is what identifies
+   *  "the same document" when the same link is opened again. */
+  sourceUrl: string | null;
   pdfBytes: Uint8Array;
   viewer: PDFViewer;
   annotator: Annotator | null;

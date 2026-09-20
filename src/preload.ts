@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('api', {
   // Write a new extension ID to the native messaging manifest
   setExtensionId: (id: string) => ipcRenderer.invoke('set-extension-id', id),
 
+  // Whether re-opening an already-open document switches to its tab
+  getReuseTabSetting: () => ipcRenderer.invoke('get-reuse-tab-setting'),
+  setReuseTabSetting: (enabled: boolean) => ipcRenderer.invoke('set-reuse-tab-setting', enabled),
+
   // Theme (Light / Dark / System Default)
   getTheme: () => ipcRenderer.invoke('get-theme'),
   setTheme: (mode: 'light' | 'dark' | 'system') => ipcRenderer.invoke('set-theme', mode),
@@ -53,9 +57,13 @@ contextBridge.exposeInMainWorld('api', {
       .forEach(ev => ipcRenderer.on(ev, () => callback(ev)));
   },
 
-  // File data pushed from main when a new window opens with a pre-selected file
-  onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer }) => void) => {
-    ipcRenderer.on('open-file-data', (_e: unknown, data: { filePath: string; buffer: ArrayBuffer }) => callback(data));
+  // File data pushed from main when a new window opens with a pre-selected file,
+  // or when a file/URL is forwarded to the running instance (native messaging,
+  // a second launch, macOS's Open With). sourceUrl is set only for a document
+  // that was downloaded from the web, since its local path is a fresh temp
+  // file every time and cannot identify "the same document" on its own.
+  onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => void) => {
+    ipcRenderer.on('open-file-data', (_e: unknown, data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => callback(data));
   },
 
   // Main relays this when another window accepted one of our tabs via drag
