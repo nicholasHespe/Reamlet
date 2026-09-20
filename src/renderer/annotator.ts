@@ -326,8 +326,6 @@ export class Annotator {
 
   // Remove all document-level listeners. Call when the tab is closed.
   destroy() {
-    // A tab can be closed mid-drag, and the mouseup that would have restored
-    // text selection is about to be unsubscribed.
     this._endDrag();
     document.removeEventListener('mouseup',   this._docMouseupHighlight);
     document.removeEventListener('mousemove', this._docMousemoveDrag);
@@ -498,11 +496,7 @@ export class Annotator {
         const ny = (e.clientY - rect.top)  / rect.height;
         const idx = this._hitTest(pageNum, nx, ny);
         if (idx >= 0) {
-          // The press landed on an annotation, so it starts a drag rather than a
-          // text selection. stopPropagation alone does not say that: the browser
-          // selects text as a default action, not through a listener, so the
-          // default has to be prevented. Suppressing user-select for the length
-          // of the drag covers the selection the press may have landed inside.
+          // Starting a drag, not a text selection.
           e.preventDefault();
           e.stopPropagation();
           window.getSelection()?.removeAllRanges();
@@ -515,8 +509,6 @@ export class Annotator {
           this._dragPageRect = rect;
           this.redrawAll();
         } else {
-          // Nothing under the cursor — leave the press alone so the select tool
-          // can still be used to select the document's own text.
           this._clearSelection();
         }
       }
