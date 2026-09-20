@@ -916,10 +916,7 @@ async function _reloadAfterSave(tab: Tab) {
 
 // ── Open / Save ────────────────────────────────────────────────
 
-// Whether re-opening a document that already has a tab switches to it instead
-// of opening a duplicate. Loaded once at startup; kept here rather than read
-// fresh on every open so the check stays synchronous with the rest of the
-// open flow.
+// Loaded once at startup so open flows can check it synchronously.
 let _reuseOpenTab = true;
 window.api.getReuseTabSetting().then(({ enabled }) => {
   _reuseOpenTab = enabled;
@@ -938,12 +935,8 @@ async function _toggleReuseTab() {
   await window.api.setReuseTabSetting(_reuseOpenTab);
 }
 
-// Return an already-open tab for the given document, or null. A tab counts as
-// "the same document" by its local path, or — for one opened from the web,
-// where every download lands at a freshly randomised temp path — by the URL
-// it came from. A tab the user has since edited is excluded: it no longer
-// reflects what re-opening the document would show, so it is better to open a
-// second, unmodified copy than to jump to a tab that is not the file on disk.
+// Return an already-open, unmodified tab for the given file path or source
+// URL, or null.
 function _findOpenTab(filePath: string | null, sourceUrl: string | null = null) {
   if (!_reuseOpenTab) return null;
   if (sourceUrl) {
@@ -1841,9 +1834,8 @@ inputCtxMenu.addEventListener('mousedown', (e) => {
   }
 });
 
-// Receive file data when this window was opened for a dragged-out tab, or when
-// a file/URL is forwarded here — a second launch, macOS's Open With, or a
-// document intercepted by the browser extension.
+// Receive file data when this window was opened for a dragged-out tab, or a
+// file/URL forwarded here from elsewhere.
 window.api.onOpenFileData(async ({ filePath, buffer, sourceUrl }) => {
   const existing = _findOpenTab(filePath, sourceUrl);
   if (existing) { switchTab(existing); return; }

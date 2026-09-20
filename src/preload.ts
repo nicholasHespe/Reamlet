@@ -57,11 +57,9 @@ contextBridge.exposeInMainWorld('api', {
       .forEach(ev => ipcRenderer.on(ev, () => callback(ev)));
   },
 
-  // File data pushed from main when a new window opens with a pre-selected file,
-  // or when a file/URL is forwarded to the running instance (native messaging,
-  // a second launch, macOS's Open With). sourceUrl is set only for a document
-  // that was downloaded from the web, since its local path is a fresh temp
-  // file every time and cannot identify "the same document" on its own.
+  // File data pushed from main when a new window opens with a pre-selected
+  // file, or a file/URL is forwarded to the running instance. sourceUrl is set
+  // only when the document came from the web.
   onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => void) => {
     ipcRenderer.on('open-file-data', (_e: unknown, data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => callback(data));
   },

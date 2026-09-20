@@ -400,10 +400,6 @@ function effectiveTheme(): 'light' | 'dark' {
 }
 
 // ── "Switch to already-open tab" setting ─────────────────────────
-// Whether re-opening a document that already has a tab switches to it instead
-// of opening a duplicate. On by default; the renderer reads it once at
-// startup and applies it itself, since the matching logic (which tab counts
-// as "the same document", and whether it has been edited since) lives there.
 
 ipcMain.handle('get-reuse-tab-setting', () => {
   const settings = readUserDataSettings();
@@ -581,11 +577,6 @@ async function resolveTarget(target: string): Promise<OpenTarget | null> {
         message: `Downloaded to:\n${filePath}`,
         buttons: ['OK'],
       });
-      // Every download lands at a freshly randomised temp path (see
-      // downloadPdfToTemp), so the renderer can't tell two fetches of the same
-      // link apart by filePath alone. The URL is the identity that survives
-      // that, and is what lets re-opening the same web link switch to the tab
-      // that is already open for it instead of downloading a duplicate.
       return { filePath, sourceUrl: target };
     } catch (err) {
       dialog.showErrorBox('Reamlet — Could not open URL', (err as Error).message ?? 'Download failed.');

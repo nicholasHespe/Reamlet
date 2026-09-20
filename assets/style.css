@@ -236,8 +236,7 @@ html, body {
 }
 .tdrop-submenu:hover .tdrop-submenu-panel { display: block; }
 
-/* Checkmark on the active choice in a radio-style submenu (e.g. Theme), and on
-   any checked on/off toggle in a dropdown (e.g. "Switch to Already-Open Tab") */
+/* Checkmark on the active choice in a radio-style submenu (e.g. Theme), or a toggle */
 .tdrop-submenu-panel button[data-theme-choice] { justify-content: flex-start; gap: 8px; }
 .titlebar-dropdown button[data-toggle] { justify-content: flex-start; gap: 8px; }
 .tdrop-check { display: inline-block; width: 10px; flex-shrink: 0; }
