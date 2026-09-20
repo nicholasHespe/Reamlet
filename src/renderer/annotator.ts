@@ -304,9 +304,7 @@ export class Annotator {
     this._docMouseupDrag = (e) => {
       if (!this._dragStart) return;
       const moved = Math.hypot(e.clientX - this._dragStart.x, e.clientY - this._dragStart.y) > 3;
-      this._dragStart    = null;
-      this._dragOrigAnn  = null;
-      this._dragPageRect = null;
+      this._endDrag();
       if (moved) this._pushHistory();
     };
     document.addEventListener('mouseup', this._docMouseupDrag);
@@ -318,8 +316,19 @@ export class Annotator {
     document.addEventListener('keydown', this._docKeydown);
   }
 
+  // Clear drag state and give the document its text selection back.
+  _endDrag() {
+    this._dragStart    = null;
+    this._dragOrigAnn  = null;
+    this._dragPageRect = null;
+    document.body.style.userSelect = '';
+  }
+
   // Remove all document-level listeners. Call when the tab is closed.
   destroy() {
+    // A tab can be closed mid-drag, and the mouseup that would have restored
+    // text selection is about to be unsubscribed.
+    this._endDrag();
     document.removeEventListener('mouseup',   this._docMouseupHighlight);
     document.removeEventListener('mousemove', this._docMousemoveDrag);
     document.removeEventListener('mouseup',   this._docMouseupDrag);
@@ -489,7 +498,16 @@ export class Annotator {
         const ny = (e.clientY - rect.top)  / rect.height;
         const idx = this._hitTest(pageNum, nx, ny);
         if (idx >= 0) {
-          e.stopPropagation(); // prevent text selection from starting
+          // The press landed on an annotation, so it starts a drag rather than a
+          // text selection. stopPropagation alone does not say that: the browser
+          // selects text as a default action, not through a listener, so the
+          // default has to be prevented. Suppressing user-select for the length
+          // of the drag covers the selection the press may have landed inside.
+          e.preventDefault();
+          e.stopPropagation();
+          window.getSelection()?.removeAllRanges();
+          document.body.style.userSelect = 'none';
+
           this._selectedIdx     = idx;
           this._selectedPageNum = pageNum;
           this._dragStart    = { x: e.clientX, y: e.clientY };
@@ -497,6 +515,8 @@ export class Annotator {
           this._dragPageRect = rect;
           this.redrawAll();
         } else {
+          // Nothing under the cursor — leave the press alone so the select tool
+          // can still be used to select the document's own text.
           this._clearSelection();
         }
       }
