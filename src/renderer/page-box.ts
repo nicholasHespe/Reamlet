@@ -53,9 +53,11 @@ export function toPdfCoords(nx: number, ny: number, box: PageBox, rot: number): 
 }
 
 /**
- * The height of the page as displayed, which is what an annotation's normalised
- * y is a fraction of — width and height swap places for quarter turns.
+ * The size of the page as displayed, which is what an annotation's normalised
+ * coordinates are a fraction of — width and height swap for quarter turns.
  */
-export function displayHeight(box: PageBox, rot: number): number {
-  return (Math.abs(rot) % 180 === 0) ? box.height : box.width;
+export function displaySize(box: PageBox, rot: number): { width: number; height: number } {
+  return (Math.abs(rot) % 180 === 0)
+    ? { width: box.width,  height: box.height }
+    : { width: box.height, height: box.width };
 }

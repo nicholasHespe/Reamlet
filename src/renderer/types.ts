@@ -39,6 +39,12 @@ export interface TextAnnotation {
   pageNum: number;
   x: number;
   y: number;
+  /**
+   * Width of the text box as a fraction of the displayed page width. The user
+   * sets it by dragging the box; the text reflows to fit and the box's height
+   * follows from however many lines that takes.
+   */
+  width: number;
   color: string;
   fontSize: number;
   bold: boolean;

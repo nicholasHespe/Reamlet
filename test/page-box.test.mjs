@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { pageBoxFromViewBox, toPdfCoords, displayHeight } from '../out/renderer/page-box.js';
+import { pageBoxFromViewBox, toPdfCoords, displaySize } from '../out/renderer/page-box.js';
 import { makePdf, loadPdfJs } from './helpers/pdf-fixtures.mjs';
 
 test('a page box keeps the displayed region, corner included', () => {
@@ -39,10 +39,10 @@ test('the four display corners map to the four corners of the box', () => {
   assert.deepEqual(toPdfCoords(0, 0, box, 270), [620, 830]);
 });
 
-test('quarter turns swap which side of the box a normalised y spans', () => {
+test('quarter turns swap which side of the box a normalised axis spans', () => {
   const box = { x: 0, y: 0, width: 600, height: 800 };
-  assert.equal(displayHeight(box, 0), 800);
-  assert.equal(displayHeight(box, 180), 800);
-  assert.equal(displayHeight(box, 90), 600);
-  assert.equal(displayHeight(box, 270), 600);
+  assert.deepEqual(displaySize(box, 0),   { width: 600, height: 800 });
+  assert.deepEqual(displaySize(box, 180), { width: 600, height: 800 });
+  assert.deepEqual(displaySize(box, 90),  { width: 800, height: 600 });
+  assert.deepEqual(displaySize(box, 270), { width: 800, height: 600 });
 });

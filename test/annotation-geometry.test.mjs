@@ -123,7 +123,7 @@ for (const geom of GEOMETRIES) {
     test(`text sits on the baseline it was typed on — ${label}`, async () => {
       const src = await makePdf({ ...geom, rotate });
       const fontSize = 14;
-      const ann = { type: 'text', pageNum: 1, x: 0.3, y: 0.2, text: 'Reamlet',
+      const ann = { type: 'text', pageNum: 1, x: 0.3, y: 0.2, width: 0.5, text: 'Reamlet',
                     color: '#000000', fontSize, bold: false, underline: false };
       const out = await save(src, [ann]);
 
