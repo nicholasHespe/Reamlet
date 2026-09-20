@@ -56,9 +56,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('theme-updated', (_e: unknown, data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => callback(data));
   },
 
-  // Spell-check + editing context menu for text fields.
-  // Only the main process is told which word is misspelled and what to offer
-  // instead, so it pushes that here when a right-click lands on an editable.
+  // Spell-check + editing context menu for text fields
   onEditableContextMenu: (callback: (data: EditableContextMenuData) => void) => {
     ipcRenderer.on('editable-context-menu', (_e: unknown, data: EditableContextMenuData) => callback(data));
   },

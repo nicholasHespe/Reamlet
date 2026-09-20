@@ -329,12 +329,8 @@ function getManifestPath(): string {
 }
 
 // ── Spell-check suggestions ──────────────────────────────────────
-// Chromium knows which word is misspelled and what to offer instead, but it
-// only reports that to the main process, through the context-menu event. The
-// renderer draws its own menus, so it has to be told. The event is raised from
-// the same path as the DOM contextmenu event — calling preventDefault() there
-// suppresses it — so the renderer leaves editable targets alone and waits for
-// this message instead.
+// Chromium reports the misspelled word and its suggestions only through this
+// event, so they're relayed to the renderer to build its own menu with.
 
 /** How many candidates to offer; Chromium usually returns a handful more. */
 const MAX_SPELLING_SUGGESTIONS = 5;
@@ -365,10 +361,7 @@ function wireEditableContextMenu(win: BW): void {
   });
 }
 
-// Swap the misspelled word under the cursor for the chosen suggestion. This has
-// to go through webContents: it edits the focused field as a native edit, so it
-// lands in the undo stack and works on any editable, including the annotation
-// textarea, which has no persistent element the renderer could address.
+// A native edit on the focused field, so it joins the undo stack.
 ipcMain.on('replace-misspelling', (e: IpcMainEvent, word: string) => {
   e.sender.replaceMisspelling(word);
 });

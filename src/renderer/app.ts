@@ -287,10 +287,7 @@ function _hideTabContextMenu() {
 
 viewerHost.addEventListener('contextmenu', (e) => {
   if (!activeTab) return;
-  // A right-click inside a text field wants the editing menu, with the spelling
-  // candidates only the main process can supply. Preventing the default here
-  // would also suppress the main-process context-menu event that carries them,
-  // so this press is left alone and answered over IPC instead.
+  // Editable fields get their own menu, built from the main-process event.
   if ((e.target as Element)?.closest('textarea, input, [contenteditable="true"]')) return;
   e.preventDefault();
 
@@ -349,9 +346,6 @@ let _misspelledWord = '';
 window.api.onEditableContextMenu((data) => {
   _misspelledWord = data.misspelledWord;
 
-  // Rebuild the candidate list. An empty one means either a correctly spelled
-  // word or no dictionary loaded for the current language; either way there is
-  // nothing to offer, so the spelling part of the menu is left out entirely.
   spellSuggestions.replaceChildren(...data.suggestions.map(word => {
     const btn = document.createElement('button');
     btn.dataset.editCtx = 'replace';
@@ -378,9 +372,7 @@ window.api.onEditableContextMenu((data) => {
   editableCtxMenu.style.top  = `${Math.max(0, Math.min(data.y, window.innerHeight - menuH - 4))}px`;
 });
 
-// mousedown rather than click, with the default prevented, so the field keeps
-// focus: the annotation textarea commits and removes itself on blur, and the
-// edit commands below all act on whatever is focused.
+// mousedown with the default prevented, so the field keeps focus.
 editableCtxMenu.addEventListener('mousedown', (e) => {
   e.preventDefault();
   const btn = (e.target as Element)?.closest('[data-edit-ctx]') as HTMLElement | null;
