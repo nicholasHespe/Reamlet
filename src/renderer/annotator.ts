@@ -143,10 +143,8 @@ export class Annotator {
     const steps = (Math.round(cwDegrees / 90) % 4 + 4) % 4;
     const targets = this.annotations.filter(a => pageNum === null || a.pageNum === pageNum);
 
-    // A text box's width is a fraction of the displayed page width, and an odd
-    // number of quarter turns swaps which page edge that is. Restating it
-    // against the new edge is what keeps the box the same size on screen. Two
-    // turns land back on the original edge, so only the parity matters.
+    // An odd number of quarter turns swaps which page edge the width is a
+    // fraction of, so restate it against the new one.
     if (steps % 2 === 1) {
       for (const ann of targets) {
         if (ann.type !== 'text') continue;
@@ -674,15 +672,9 @@ export class Annotator {
     });
   }
 
-  /**
-   * Open the editing textarea for a text annotation.
-   *
-   * Its text box is laid out to match what the canvas will draw: the content box
-   * is exactly `widthPx` wide and starts at `left`, so the browser soft-wraps at
-   * the same width the annotation wraps at. Only the width is the user's to
-   * drag — the height tracks the text, which is why the box never clips what
-   * has been typed into it.
-   */
+  // The textarea's content box is exactly `widthPx` wide, so the browser
+  // soft-wraps at the same width the annotation will. Only width is
+  // draggable; height grows to fit the text.
   _openTextarea(
     wrapper: HTMLElement,
     left: number,
@@ -717,16 +709,14 @@ export class Annotator {
       white-space:     pre-wrap;
       word-break:      break-word;
     `;
-    // Grow to fit the wrapped text, both as it is typed and as the box is dragged
-    // narrower. Reset to a single line first so the box can shrink again too.
+    // Grow to fit the wrapped text; reset first so it can shrink too.
     const fitHeight = () => {
       ta.style.height = 'auto';
       ta.style.height = `${ta.scrollHeight}px`;
     };
     wrapper.appendChild(ta);
     fitHeight();
-    // Re-fit when the user drags the box's width. Only width is watched: reacting
-    // to the height this very callback sets would chase its own tail.
+    // Re-fit on width changes only — height changes are this callback's own doing.
     let lastWidth = ta.clientWidth;
     const resizeObserver = new ResizeObserver(() => {
       if (ta.clientWidth === lastWidth) return;
@@ -738,8 +728,6 @@ export class Annotator {
     // Move caret to end if editing existing text
     if (initialText) { ta.selectionStart = ta.selectionEnd = initialText.length; }
 
-    // The content box is what the text wraps inside, so measure that rather than
-    // the element, whose width also covers the border and padding.
     const contentWidth = () => ta.clientWidth - TEXTAREA_PADDING_X * 2;
 
     let committed = false;
@@ -772,11 +760,7 @@ export class Annotator {
 
   // ── Text measurement ────────────────────────────────────────
 
-  /**
-   * A canvas kept only for measuring text. Hit testing and the selection box
-   * need to know how the text wraps without a page context to hand, and they
-   * must agree with what _drawAnnotation paints.
-   */
+  /** Off-screen canvas used only to measure text width. */
   _measureCanvas: HTMLCanvasElement | null = null;
 
   _measurer(fontPx: number, bold: boolean): MeasureText {
@@ -830,8 +814,6 @@ export class Annotator {
         ny >= r.y - tol && ny <= r.y + r.height + tol
       );
     } else if (a.type === 'text') {
-      // The box the user dragged, not a guess from the text: its width is the
-      // stored one and its height is however many lines the text wraps to.
       const b = this._textBounds(a, w, h);
       const px = 4 / w, py = 4 / h; // small pixel tolerance
       return nx >= b.x - px && nx <= b.x + b.w + px &&
@@ -1043,9 +1025,6 @@ export class Annotator {
       const weight = annot.bold ? 'bold ' : '';
       ctx.fillStyle = annot.color;
       ctx.font      = `${weight}${fs}px ${TEXT_FONT_STACK}`;
-      // The box's width is what the text reflows inside; its height is whatever
-      // that takes. Measuring through the same context that paints keeps the
-      // break points identical to what the user sees while typing.
       this._textLines(annot, w).forEach((line: string, i: number) => {
         const x = annot.x * w;
         // Offsets are in points and scaled here, so a line keeps the same

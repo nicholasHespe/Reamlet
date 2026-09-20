@@ -23,12 +23,7 @@ export function textUnderlineThickness(fontSize: number): number {
   return fontSize / 12;
 }
 
-/**
- * How far a block of `lineCount` lines reaches below the annotation's anchor y —
- * down to the descender of the last line, taking half a font size as the descent
- * below its baseline. This is what the selection box and hit test measure, so a
- * text annotation's box always contains exactly the text that is drawn.
- */
+/** Height of a block of `lineCount` lines, anchor y to the last line's descender. */
 export function textBlockHeight(lineCount: number, fontSize: number): number {
   return Math.max(1, lineCount) * (fontSize + TEXT_LINE_GAP);
 }
@@ -37,15 +32,10 @@ export function textBlockHeight(lineCount: number, fontSize: number): number {
 export type MeasureText = (text: string) => number;
 
 /**
- * Break `text` into the lines it occupies inside a box `maxWidth` wide.
- *
- * The box's width is the user's to set and is never inferred from the text —
- * the text reflows to fit it. Newlines the user typed are kept as hard breaks;
- * everything else is greedy word wrapping. A single word too long for the box
- * is split mid-word rather than allowed to spill out of it.
- *
- * Callers pass their own `measure` so the canvas can use its font metrics and
- * the saver the embedded font's, rather than one guessing at the other's.
+ * Break `text` into the lines it occupies inside a box `maxWidth` wide. Typed
+ * newlines are hard breaks; everything else is greedy word wrapping, splitting
+ * a word too long for the box. `measure` is supplied by the caller so screen
+ * and saved-file wrapping can each use their own font metrics.
  */
 export function wrapText(text: string, maxWidth: number, measure: MeasureText): string[] {
   const lines: string[] = [];

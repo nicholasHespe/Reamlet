@@ -212,9 +212,7 @@ function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox
 
   const display = displaySize(box, rot);
 
-  // Reflow the text inside the box the user sized, exactly as the canvas overlay
-  // does — the only difference being that widths come from the embedded font
-  // rather than from the browser's.
+  // Reflow inside the stored box width, using the embedded font's metrics.
   const lines = wrapText(ann.text, ann.width * display.width,
                          (s) => font.widthOfTextAtSize(s, size));
 

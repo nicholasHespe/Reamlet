@@ -80,8 +80,6 @@ async function saveText(overrides) {
 }
 
 test('a long single-line annotation is wrapped in the saved file', async () => {
-  // The bug: text with no newlines in it was written out as one endless line
-  // running off the side of the page.
   const { out } = await saveText();
   const drawn = await readDrawnText(out);
 
