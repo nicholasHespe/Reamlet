@@ -46,6 +46,8 @@ export interface TextAnnotation {
   bold: boolean;
   underline: boolean;
   text: string;
+  /** Background fill behind the text, or null for no fill. */
+  fillColor: string | null;
 }
 
 export interface ShapeAnnotation {
@@ -57,6 +59,8 @@ export interface ShapeAnnotation {
   y2: number;
   color: string;
   thickness: number;
+  /** Fill colour, or null for no fill. Only meaningful for 'rect' and 'oval'. */
+  fillColor: string | null;
 }
 
 export type Annotation = DrawAnnotation | HighlightAnnotation | TextAnnotation | ShapeAnnotation;

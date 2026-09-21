@@ -87,6 +87,9 @@ const fontSizeInput  = document.getElementById('font-size-input') as HTMLInputEl
 const colorBtn       = document.getElementById('color-btn')!;
 const colorDot       = document.getElementById('color-dot')!;
 const colorPanel     = document.getElementById('color-panel')!;
+const fillBtn        = document.getElementById('fill-btn')!;
+const fillDot        = document.getElementById('fill-dot')!;
+const fillPanel      = document.getElementById('fill-panel')!;
 const titleFilename  = document.getElementById('title-filename')!;
 const contextMenu    = document.getElementById('context-menu')!;
 const inputCtxMenu   = document.getElementById('input-ctx-menu')!;
@@ -267,12 +270,21 @@ viewerScrollbarThumb.addEventListener('mousedown', (e) => {
 
 colorBtn.addEventListener('click', (e) => {
   e.stopPropagation();
+  fillPanel.classList.add('hidden');
   colorPanel.classList.toggle('hidden');
 });
 
 // Close colour panel when clicking anywhere else
 document.addEventListener('click', () => colorPanel.classList.add('hidden'));
 colorPanel.addEventListener('click', (e) => e.stopPropagation());
+
+fillBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  colorPanel.classList.add('hidden');
+  fillPanel.classList.toggle('hidden');
+});
+document.addEventListener('click', () => fillPanel.classList.add('hidden'));
+fillPanel.addEventListener('click', (e) => e.stopPropagation());
 
 // ── Context menu ───────────────────────────────────────────────
 
@@ -775,6 +787,7 @@ function switchTab(tab: Tab) {
   }
 
   syncSwatches(tab.annotator?.color);
+  syncFillSwatches(tab.annotator?.fillColor);
   renderToc(tab.outline);
   updatePageDisplay(tab);
   attachScrollListener(tab);
@@ -893,6 +906,7 @@ async function _wakeTab(tab: Tab) {
     syncToolButtons(tab.annotator!.tool);
     syncTextFormatButtons(tab.annotator!);
     syncSwatches(tab.annotator!.color);
+    syncFillSwatches(tab.annotator!.fillColor);
     renderToc(tab.outline);
     updatePageDisplay(tab);
     attachScrollListener(tab);
@@ -945,6 +959,7 @@ async function _loadTabContent(tab: Tab, preserveView = false) {
     syncToolButtons(tab.annotator!.tool);
     syncTextFormatButtons(tab.annotator!);
     syncSwatches(tab.annotator!.color);
+    syncFillSwatches(tab.annotator!.fillColor);
     renderToc(tab.outline);
     updatePageDisplay(tab);
     _syncScrollbar();
@@ -1592,10 +1607,21 @@ function syncTextFormatButtons(annotator: Annotator) {
 
 function syncSwatches(color: string | undefined) {
   if (!color) return;
-  document.querySelectorAll('.swatch').forEach(s => {
+  colorPanel.querySelectorAll('.swatch').forEach(s => {
     s.classList.toggle('active', (s as HTMLElement).dataset.color === color);
   });
   colorDot.style.background = color;
+}
+
+// null means no fill — the "none" swatch, rather than any colour, is active.
+function syncFillSwatches(fillColor: string | null | undefined) {
+  if (fillColor === undefined) return;
+  fillPanel.querySelectorAll('.swatch').forEach(s => {
+    const swatchColor = (s as HTMLElement).dataset.color === 'none' ? null : (s as HTMLElement).dataset.color;
+    s.classList.toggle('active', swatchColor === fillColor);
+  });
+  fillDot.classList.toggle('fill-none', !fillColor);
+  if (fillColor) fillDot.style.background = fillColor;
 }
 
 // ── Toolbar event wiring ───────────────────────────────────────
@@ -1608,12 +1634,22 @@ document.querySelectorAll('.tool-btn').forEach(btn => {
   });
 });
 
-document.querySelectorAll('.swatch').forEach(s => {
+colorPanel.querySelectorAll('.swatch').forEach(s => {
   s.addEventListener('click', () => {
     const color = (s as HTMLElement).dataset.color ?? '';
     if (activeTab?.annotator) activeTab.annotator.setColor(color);
     syncSwatches(color);
     colorPanel.classList.add('hidden');
+  });
+});
+
+fillPanel.querySelectorAll('.swatch').forEach(s => {
+  s.addEventListener('click', () => {
+    const raw   = (s as HTMLElement).dataset.color ?? 'none';
+    const color = raw === 'none' ? null : raw;
+    if (activeTab?.annotator) activeTab.annotator.setFillColor(color);
+    syncFillSwatches(color);
+    fillPanel.classList.add('hidden');
   });
 });
 

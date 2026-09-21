@@ -89,6 +89,8 @@ export async function readAnnotations(bytes, pageIdx = 0) {
       line:       get('L')          ? nums(get('L'))          : null,
       quadPoints: get('QuadPoints') ? nums(get('QuadPoints')) : null,
       inkList:    inkList ? inkList.asArray().map(e => nums(doc.context.lookup(e) ?? e)) : null,
+      color:      get('C')  ? nums(get('C'))  : null,
+      fillColor:  get('IC') ? nums(get('IC')) : null,
     });
   }
   return out;
@@ -102,4 +104,37 @@ export async function readDrawnText(bytes, pageNum = 1) {
   return tc.items
     .filter(it => it.str !== '')
     .map(it => ({ str: it.str, x: it.transform[4], y: it.transform[5], width: it.width }));
+}
+
+/**
+ * Filled rectangles drawn straight into the page content stream (as opposed to
+ * a native /Annot), e.g. a text annotation's background fill. pdf-lib builds
+ * such a rectangle as an axis-aligned path of the given width/height at the
+ * local origin, then rotates and positions it with a separate transform — so
+ * the path's own bounding box stays `[0, 0, width, height]` regardless of page
+ * rotation, which is what this reads back, tagged with the active fill colour.
+ */
+export async function readFilledRects(bytes, pageNum = 1) {
+  const doc  = await loadPdfJs(bytes);
+  const page = await doc.getPage(pageNum);
+  const opList = await page.getOperatorList();
+  const OPS = pdfjs.OPS;
+
+  const rects = [];
+  let fillColor = null;
+  let pending   = null;
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const op   = opList.fnArray[i];
+    const args = opList.argsArray[i];
+    if (op === OPS.setFillRGBColor) {
+      fillColor = [args[0], args[1], args[2]];
+    } else if (op === OPS.constructPath) {
+      const [minX, minY, maxX, maxY] = args[2];
+      pending = { width: maxX - minX, height: maxY - minY };
+    } else if (op === OPS.fill && pending) {
+      rects.push({ color: fillColor, width: pending.width, height: pending.height });
+      pending = null;
+    }
+  }
+  return rects;
 }
