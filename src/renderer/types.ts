@@ -39,11 +39,15 @@ export interface TextAnnotation {
   pageNum: number;
   x: number;
   y: number;
+  /** Width of the text box, as a fraction of the displayed page width. */
+  width: number;
   color: string;
   fontSize: number;
   bold: boolean;
   underline: boolean;
   text: string;
+  /** Background fill behind the text, or null for no fill. */
+  fillColor: string | null;
 }
 
 export interface ShapeAnnotation {
@@ -55,6 +59,8 @@ export interface ShapeAnnotation {
   y2: number;
   color: string;
   thickness: number;
+  /** Fill colour, or null for no fill. Only meaningful for 'rect' and 'oval'. */
+  fillColor: string | null;
 }
 
 export type Annotation = DrawAnnotation | HighlightAnnotation | TextAnnotation | ShapeAnnotation;
@@ -68,6 +74,8 @@ interface FindCacheEntry {
 export interface Tab {
   id: number;
   filePath: string | null;
+  /** Origin URL for a document opened from the web; null for a local file. */
+  sourceUrl: string | null;
   pdfBytes: Uint8Array;
   viewer: PDFViewer;
   annotator: Annotator | null;

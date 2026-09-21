@@ -4,28 +4,21 @@
 
 import type { PDFViewer, PageData } from './viewer.js';
 import type { Annotation, ShapeAnnotation, HighlightAnnotation, TextAnnotation } from './types.js';
+import {
+  TEXT_LINE_GAP, TEXT_FONT_STACK, textBaselineOffset, textUnderlineThickness,
+  textBlockHeight, wrapText, type MeasureText,
+} from './text-layout.js';
 
-// ── Text layout — shared with saver.ts ──────────────────────────
-// All values are in PDF points (1/72"), the same unit an unscaled page uses.
-// The canvas overlay multiplies them by the viewer scale; the saver writes them
-// into the page as-is. Keeping one definition is what makes a text annotation
-// land on the same baseline on screen and in the saved file at any zoom level.
+/** Width of a newly placed text box, in PDF points. */
+const TEXT_DEFAULT_WIDTH = 160;
 
-/** Vertical gap between lines, and between a baseline and its underline. */
-export const TEXT_LINE_GAP = 2;
-
-/** Font stack whose metrics match the PDF's Helvetica (Arial is metric-compatible). */
-export const TEXT_FONT_STACK = 'Helvetica, Arial, sans-serif';
-
-/** Distance from the annotation's anchor y down to the baseline of line `lineIndex`. */
-export function textBaselineOffset(fontSize: number, lineIndex: number): number {
-  return lineIndex * (fontSize + TEXT_LINE_GAP) + fontSize / 2 + TEXT_LINE_GAP;
-}
-
-/** Thickness of the underline rule drawn under a line of text. */
-export function textUnderlineThickness(fontSize: number): number {
-  return fontSize / 12;
-}
+// Geometry of the editing textarea's chrome, kept here so the CSS below and the
+// measurements taken off it cannot drift apart.
+const TEXTAREA_BORDER    = 1;
+const TEXTAREA_PADDING_X = 4;
+const TEXTAREA_PADDING_Y = 2;
+/** Distance from the textarea's left edge to the first glyph. */
+const TEXTAREA_INSET     = TEXTAREA_BORDER + TEXTAREA_PADDING_X;
 
 export class Annotator {
   pages: PageData[];
@@ -34,6 +27,8 @@ export class Annotator {
   tool: string;
   color: string;
   thickness: number;
+  /** Fill colour applied to newly placed rect/oval/text annotations; null for no fill. */
+  fillColor: string | null;
   textBold: boolean;
   textUnderline: boolean;
   textFontSize: number;
@@ -70,6 +65,7 @@ export class Annotator {
     this.tool        = 'select';
     this.color       = '#ff3333';
     this.thickness   = 3;
+    this.fillColor   = null;
     this.textBold      = false;
     this.textUnderline = false;
     this.textFontSize  = 14;
@@ -116,6 +112,7 @@ export class Annotator {
 
   setColor(color: string)       { this.color        = color; }
   setThickness(t: number)       { this.thickness    = t; }
+  setFillColor(color: string | null) { this.fillColor = color; }
   setTextBold(b: boolean)       { this.textBold     = b; }
   setTextUnderline(b: boolean)  { this.textUnderline = b; }
   setTextFontSize(size: number) { this.textFontSize = Math.max(8, Math.min(96, size)); }
@@ -149,6 +146,17 @@ export class Annotator {
   rotateAnnotations(pageNum: number | null, cwDegrees: number) {
     const steps = (Math.round(cwDegrees / 90) % 4 + 4) % 4;
     const targets = this.annotations.filter(a => pageNum === null || a.pageNum === pageNum);
+
+    // An odd number of quarter turns swaps which page edge the width is a
+    // fraction of, so restate it against the new one.
+    if (steps % 2 === 1) {
+      for (const ann of targets) {
+        if (ann.type !== 'text') continue;
+        const canvas = this.pages[ann.pageNum - 1]?.annotCanvas;
+        if (canvas && canvas.height > 0) ann.width *= canvas.width / canvas.height;
+      }
+    }
+
     for (let s = 0; s < steps; s++) {
       for (const ann of targets) {
         if (ann.type === 'draw' || ann.type === 'freeHighlight') {
@@ -304,9 +312,7 @@ export class Annotator {
     this._docMouseupDrag = (e) => {
       if (!this._dragStart) return;
       const moved = Math.hypot(e.clientX - this._dragStart.x, e.clientY - this._dragStart.y) > 3;
-      this._dragStart    = null;
-      this._dragOrigAnn  = null;
-      this._dragPageRect = null;
+      this._endDrag();
       if (moved) this._pushHistory();
     };
     document.addEventListener('mouseup', this._docMouseupDrag);
@@ -318,8 +324,17 @@ export class Annotator {
     document.addEventListener('keydown', this._docKeydown);
   }
 
+  // Clear drag state and give the document its text selection back.
+  _endDrag() {
+    this._dragStart    = null;
+    this._dragOrigAnn  = null;
+    this._dragPageRect = null;
+    document.body.style.userSelect = '';
+  }
+
   // Remove all document-level listeners. Call when the tab is closed.
   destroy() {
+    this._endDrag();
     document.removeEventListener('mouseup',   this._docMouseupHighlight);
     document.removeEventListener('mousemove', this._docMousemoveDrag);
     document.removeEventListener('mouseup',   this._docMouseupDrag);
@@ -416,6 +431,7 @@ export class Annotator {
             x2: x2 / w, y2: y2 / h,
             color:     this.color,
             thickness: this.thickness / scale,
+            fillColor: (this.tool === 'rect' || this.tool === 'oval') ? this.fillColor : null,
           });
           this._pushHistory();
         }
@@ -489,7 +505,12 @@ export class Annotator {
         const ny = (e.clientY - rect.top)  / rect.height;
         const idx = this._hitTest(pageNum, nx, ny);
         if (idx >= 0) {
-          e.stopPropagation(); // prevent text selection from starting
+          // Starting a drag, not a text selection.
+          e.preventDefault();
+          e.stopPropagation();
+          window.getSelection()?.removeAllRanges();
+          document.body.style.userSelect = 'none';
+
           this._selectedIdx     = idx;
           this._selectedPageNum = pageNum;
           this._dragStart    = { x: e.clientX, y: e.clientY };
@@ -609,17 +630,20 @@ export class Annotator {
 
     const scale = this.viewer?.scale ?? 1;
     this._openTextarea(wrapper, cx * scaleX, cy * scaleY, '', {
-      fontSize: fontSize * scale, weight, decor, color: this.color,
-      onCommit: (text) => {
+      fontSize: fontSize * scale, weight, decor, color: this.color, fillColor: this.fillColor,
+      widthPx: TEXT_DEFAULT_WIDTH * scale * scaleX,
+      onCommit: (text, widthPx) => {
         if (!text) return;
         const annot: TextAnnotation = {
           type: 'text', pageNum,
           x: cx / w, y: cy / h,
+          width: widthPx / scaleX / w,
           text,
           color:     this.color,
           fontSize,
           bold:      this.textBold,
           underline: this.textUnderline,
+          fillColor: this.fillColor,
         };
         this.annotations.push(annot);
         this._pushHistory();
@@ -648,9 +672,10 @@ export class Annotator {
 
     const scale = this.viewer?.scale ?? 1;
     this._openTextarea(wrapper, ann.x * w * scaleX, ann.y * h * scaleY, ann.text, {
-      fontSize: ann.fontSize * scale, weight, decor, color: ann.color,
-      onCommit: (text) => {
-        const newAnn = { ...ann, text };
+      fontSize: ann.fontSize * scale, weight, decor, color: ann.color, fillColor: ann.fillColor,
+      widthPx: ann.width * w * scaleX,
+      onCommit: (text, widthPx) => {
+        const newAnn: TextAnnotation = { ...ann, text, width: widthPx / scaleX / w };
         if (text) {
           this.annotations.splice(idx, 0, newAnn);
           this._pushHistory();
@@ -665,52 +690,120 @@ export class Annotator {
     });
   }
 
-  _openTextarea(wrapper: HTMLElement, left: number, top: number, initialText: string, { fontSize, weight, decor, color, onCommit, onCancel }: { fontSize: number; weight: string; decor: string; color: string; onCommit?: (text: string) => void; onCancel?: () => void }) {
+  // The textarea's content box is exactly `widthPx` wide, so the browser
+  // soft-wraps at the same width the annotation will. Only width is
+  // draggable; height grows to fit the text.
+  _openTextarea(
+    wrapper: HTMLElement,
+    left: number,
+    top: number,
+    initialText: string,
+    { fontSize, weight, decor, color, fillColor, widthPx, onCommit, onCancel }: {
+      fontSize: number; weight: string; decor: string; color: string; fillColor: string | null; widthPx: number;
+      onCommit?: (text: string, widthPx: number) => void;
+      onCancel?: () => void;
+    },
+  ) {
     const ta = document.createElement('textarea');
     ta.value = initialText;
     ta.style.cssText = `
       position:        absolute;
-      left:            ${left - 4}px;
+      left:            ${left - TEXTAREA_INSET}px;
       top:             ${top - fontSize / 2}px;
-      width:           ${Math.max(fontSize * 8, 80)}px;
-      height:          ${fontSize + 8}px;
-      background:      transparent;
-      border:          1px dashed rgba(128,128,128,0.6);
+      box-sizing:      content-box;
+      width:           ${Math.max(widthPx, fontSize)}px;
+      background:      ${fillColor ?? 'transparent'};
+      border:          ${TEXTAREA_BORDER}px dashed rgba(128,128,128,0.6);
       font:            ${weight} ${fontSize}px ${TEXT_FONT_STACK};
       color:           ${color};
       text-decoration: ${decor};
-      line-height:     ${fontSize + 2}px;
+      line-height:     ${fontSize + TEXT_LINE_GAP}px;
       caret-color:     ${color};
-      resize:          both;
+      resize:          horizontal;
       z-index:         10;
       outline:         none;
-      padding:         2px 4px;
+      padding:         ${TEXTAREA_PADDING_Y}px ${TEXTAREA_PADDING_X}px;
       overflow:        hidden;
+      white-space:     pre-wrap;
+      word-break:      break-word;
     `;
+    // Grow to fit the wrapped text; reset first so it can shrink too.
+    const fitHeight = () => {
+      ta.style.height = 'auto';
+      ta.style.height = `${ta.scrollHeight}px`;
+    };
     wrapper.appendChild(ta);
+    fitHeight();
+    // Re-fit on width changes only — height changes are this callback's own doing.
+    let lastWidth = ta.clientWidth;
+    const resizeObserver = new ResizeObserver(() => {
+      if (ta.clientWidth === lastWidth) return;
+      lastWidth = ta.clientWidth;
+      fitHeight();
+    });
+    resizeObserver.observe(ta);
     ta.focus();
     // Move caret to end if editing existing text
     if (initialText) { ta.selectionStart = ta.selectionEnd = initialText.length; }
 
+    const contentWidth = () => ta.clientWidth - TEXTAREA_PADDING_X * 2;
+
     let committed = false;
+    const finish = () => {
+      resizeObserver.disconnect();
+      const width = contentWidth();
+      ta.remove();
+      return width;
+    };
     const commit = () => {
       if (committed) return;
       committed = true;
-      const text = ta.value.trim();
-      ta.remove();
-      onCommit?.(text);
+      const text  = ta.value.trim();
+      const width = finish();
+      onCommit?.(text, width);
     };
     const cancel = () => {
       if (committed) return;
       committed = true;
-      ta.remove();
+      finish();
       onCancel?.();
     };
 
+    ta.addEventListener('input',   fitHeight);
     ta.addEventListener('blur',    commit);
     ta.addEventListener('keydown', e => {
       if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     });
+  }
+
+  // ── Text measurement ────────────────────────────────────────
+
+  /** Off-screen canvas used only to measure text width. */
+  _measureCanvas: HTMLCanvasElement | null = null;
+
+  _measurer(fontPx: number, bold: boolean): MeasureText {
+    this._measureCanvas ??= document.createElement('canvas');
+    const ctx = this._measureCanvas.getContext('2d')!;
+    ctx.font = `${bold ? 'bold ' : ''}${fontPx}px ${TEXT_FONT_STACK}`;
+    return (text: string) => ctx.measureText(text).width;
+  }
+
+  /** The lines a text annotation occupies on a canvas `w` px wide. */
+  _textLines(ann: TextAnnotation, w: number): string[] {
+    const scale = this.viewer?.scale ?? 1;
+    return wrapText(ann.text, ann.width * w, this._measurer(ann.fontSize * scale, ann.bold));
+  }
+
+  /** A text annotation's box in normalised page coords: stored width, wrapped height. */
+  _textBounds(ann: TextAnnotation, w: number, h: number) {
+    const scale = this.viewer?.scale ?? 1;
+    const lines = this._textLines(ann, w);
+    return {
+      x: ann.x,
+      y: ann.y,
+      w: ann.width,
+      h: textBlockHeight(lines.length, ann.fontSize) * scale / h,
+    };
   }
 
   // ── Hit testing ─────────────────────────────────────────────
@@ -739,16 +832,10 @@ export class Annotator {
         ny >= r.y - tol && ny <= r.y + r.height + tol
       );
     } else if (a.type === 'text') {
-      const scale = this.viewer?.scale ?? 1;
-      const fs    = a.fontSize * scale;
-      const lines = a.text.split('\n');
-      const lineH = (fs + TEXT_LINE_GAP * scale) / h;
-      const totalH = lineH * lines.length;
-      const longestChars = Math.max(...lines.map(l => l.length), 1);
-      const textW = longestChars * fs * 0.6 / w;
+      const b = this._textBounds(a, w, h);
       const px = 4 / w, py = 4 / h; // small pixel tolerance
-      return nx >= a.x - px && nx <= a.x + textW + px &&
-             ny >= a.y - py && ny <= a.y + totalH + py;
+      return nx >= b.x - px && nx <= b.x + b.w + px &&
+             ny >= b.y - py && ny <= b.y + b.h + py;
     } else if (a.type === 'rect' || a.type === 'oval') {
       const x1 = Math.min(a.x1, a.x2), x2 = Math.max(a.x1, a.x2);
       const y1 = Math.min(a.y1, a.y2), y2 = Math.max(a.y1, a.y2);
@@ -811,8 +898,8 @@ export class Annotator {
       const allY = ann.rects.flatMap(r => [r.y * h, (r.y + r.height) * h]);
       return { x: Math.min(...allX), y: Math.min(...allY), w: Math.max(...allX) - Math.min(...allX), h: Math.max(...allY) - Math.min(...allY) };
     } else if (ann.type === 'text') {
-      const fs = ann.fontSize * (this.viewer?.scale ?? 1);
-      return { x: ann.x * w - 2, y: ann.y * h - 2, w: 120, h: fs * 1.5 + 4 };
+      const b = this._textBounds(ann, w, h);
+      return { x: b.x * w, y: b.y * h, w: b.w * w, h: b.h * h };
     } else if (ann.type === 'rect' || ann.type === 'oval' || ann.type === 'line' || ann.type === 'arrow') {
       const x1 = Math.min(ann.x1, ann.x2) * w, x2 = Math.max(ann.x1, ann.x2) * w;
       const y1 = Math.min(ann.y1, ann.y2) * h, y2 = Math.max(ann.y1, ann.y2) * h;
@@ -842,17 +929,19 @@ export class Annotator {
   _drawPreview(canvas: HTMLCanvasElement, [x1, y1]: number[], [x2, y2]: number[]) {
     const ctx = canvas.getContext('2d')!;
     ctx.save();
+    const filled = (this.tool === 'rect' || this.tool === 'oval') && !!this.fillColor;
+    if (filled) ctx.fillStyle = this.fillColor!;
     ctx.strokeStyle = this.color;
     ctx.lineWidth   = this.thickness;
     ctx.lineCap     = 'round';
     ctx.lineJoin    = 'round';
     ctx.setLineDash([4, 4]);
-    this._drawShape(ctx, this.tool, x1, y1, x2, y2);
+    this._drawShape(ctx, this.tool, x1, y1, x2, y2, filled);
     ctx.setLineDash([]);
     ctx.restore();
   }
 
-  _drawShape(ctx: CanvasRenderingContext2D, type: string, x1: number, y1: number, x2: number, y2: number) {
+  _drawShape(ctx: CanvasRenderingContext2D, type: string, x1: number, y1: number, x2: number, y2: number, fill = false) {
     if (type === 'line') {
       ctx.beginPath();
       ctx.moveTo(x1, y1);
@@ -860,13 +949,16 @@ export class Annotator {
       ctx.stroke();
     } else if (type === 'rect') {
       ctx.beginPath();
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.rect(x1, y1, x2 - x1, y2 - y1);
+      if (fill) ctx.fill();
+      ctx.stroke();
     } else if (type === 'oval') {
       const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
       const rx = Math.max(Math.abs(x2 - x1) / 2, 1);
       const ry = Math.max(Math.abs(y2 - y1) / 2, 1);
       ctx.beginPath();
       ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      if (fill) ctx.fill();
       ctx.stroke();
     } else if (type === 'arrow') {
       const headLen = Math.max(10, ctx.lineWidth * 4);
@@ -952,12 +1044,16 @@ export class Annotator {
       });
 
     } else if (annot.type === 'text') {
-      const scale  = this.viewer?.scale ?? 1;
       const fs     = annot.fontSize * scale;
       const weight = annot.bold ? 'bold ' : '';
+      if (annot.fillColor) {
+        const b = this._textBounds(annot, w, h);
+        ctx.fillStyle = annot.fillColor;
+        ctx.fillRect(b.x * w, b.y * h, b.w * w, b.h * h);
+      }
       ctx.fillStyle = annot.color;
       ctx.font      = `${weight}${fs}px ${TEXT_FONT_STACK}`;
-      annot.text.split('\n').forEach((line: string, i: number) => {
+      this._textLines(annot, w).forEach((line: string, i: number) => {
         const x = annot.x * w;
         // Offsets are in points and scaled here, so a line keeps the same
         // position on the page at every zoom level — and the same position
@@ -972,11 +1068,13 @@ export class Annotator {
       });
 
     } else if (annot.type === 'line' || annot.type === 'rect' || annot.type === 'oval' || annot.type === 'arrow') {
+      const filled = (annot.type === 'rect' || annot.type === 'oval') && !!annot.fillColor;
+      if (filled) ctx.fillStyle = annot.fillColor!;
       ctx.strokeStyle = annot.color;
       ctx.lineWidth   = annot.thickness * scale;
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';
-      this._drawShape(ctx, annot.type, annot.x1 * w, annot.y1 * h, annot.x2 * w, annot.y2 * h);
+      this._drawShape(ctx, annot.type, annot.x1 * w, annot.y1 * h, annot.x2 * w, annot.y2 * h, filled);
     }
     ctx.restore();
   }

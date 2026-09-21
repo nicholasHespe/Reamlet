@@ -5,6 +5,16 @@
 
 import type { MessageBoxOptions } from 'electron';
 
+interface EditableContextMenuData {
+  x: number;
+  y: number;
+  misspelledWord: string;
+  suggestions: string[];
+  canCut: boolean;
+  canCopy: boolean;
+  canPaste: boolean;
+}
+
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
@@ -39,12 +49,24 @@ contextBridge.exposeInMainWorld('api', {
   // Write a new extension ID to the native messaging manifest
   setExtensionId: (id: string) => ipcRenderer.invoke('set-extension-id', id),
 
+  // Whether re-opening an already-open document switches to its tab
+  getReuseTabSetting: () => ipcRenderer.invoke('get-reuse-tab-setting'),
+  setReuseTabSetting: (enabled: boolean) => ipcRenderer.invoke('set-reuse-tab-setting', enabled),
+
   // Theme (Light / Dark / System Default)
   getTheme: () => ipcRenderer.invoke('get-theme'),
   setTheme: (mode: 'light' | 'dark' | 'system') => ipcRenderer.invoke('set-theme', mode),
   onThemeUpdated: (callback: (data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => void) => {
     ipcRenderer.on('theme-updated', (_e: unknown, data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => callback(data));
   },
+
+  // Spell-check + editing context menu for text fields
+  onEditableContextMenu: (callback: (data: EditableContextMenuData) => void) => {
+    ipcRenderer.on('editable-context-menu', (_e: unknown, data: EditableContextMenuData) => callback(data));
+  },
+  replaceMisspelling: (word: string) => ipcRenderer.send('replace-misspelling', word),
+  addToDictionary:    (word: string) => ipcRenderer.send('add-to-dictionary', word),
+  editableCommand:    (command: 'cut' | 'copy' | 'paste') => ipcRenderer.send('editable-edit', command),
 
   // Subscribe to menu events
   onMenuEvent: (callback: (event: string) => void) => {
@@ -53,9 +75,11 @@ contextBridge.exposeInMainWorld('api', {
       .forEach(ev => ipcRenderer.on(ev, () => callback(ev)));
   },
 
-  // File data pushed from main when a new window opens with a pre-selected file
-  onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer }) => void) => {
-    ipcRenderer.on('open-file-data', (_e: unknown, data: { filePath: string; buffer: ArrayBuffer }) => callback(data));
+  // File data pushed from main when a new window opens with a pre-selected
+  // file, or a file/URL is forwarded to the running instance. sourceUrl is set
+  // only when the document came from the web.
+  onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => void) => {
+    ipcRenderer.on('open-file-data', (_e: unknown, data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => callback(data));
   },
 
   // Main relays this when another window accepted one of our tabs via drag

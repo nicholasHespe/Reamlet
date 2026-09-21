@@ -6,6 +6,7 @@
 import * as _pdfjsLib from '../../node_modules/pdfjs-dist/build/pdf.mjs';
 import type * as PDFJSLib from 'pdfjs-dist';
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist';
+import { pageBoxFromViewBox, type PageBox } from './page-box.js';
 
 // Cast to the pdfjs-dist type surface so all downstream code is fully typed
 const pdfjsLib = _pdfjsLib as unknown as typeof PDFJSLib;
@@ -47,7 +48,7 @@ export class PDFViewer {
   _annCache: Record<number, PDFFormAnnotation[]>;
   _pendingRender: Set<number>;
   _io: IntersectionObserver | null;
-  _pageSizeCache: Record<number, { width: number; height: number }>;
+  _pageBoxCache: Record<number, PageBox>;
   isSleeping: boolean;
   onPageRendered?: (pageNum: number) => void;
 
@@ -65,12 +66,19 @@ export class PDFViewer {
     this._annCache         = {}; // pageNum → cached annotation array
     this._pendingRender    = new Set(); // pageNums needing re-render once visible
     this._io               = null;  // IntersectionObserver for deferred renders
-    this._pageSizeCache    = {}; // pageNum → { width, height } in native (unrotated) PDF pts — survives sleep
+    this._pageBoxCache     = {}; // pageNum → displayed page box in native (unrotated) PDF pts — survives sleep
     this.isSleeping        = false;
     // Notified after _renderPage() resizes (and thus clears) a page's annotCanvas —
     // callers that overlay annotations on top of the PDF canvas must redraw the page
     // that finished rendering, since the annotation canvas has no content of its own.
     this.onPageRendered    = undefined;
+  }
+
+  // The displayed box of a page, straight from the viewport PDF.js renders with.
+  // viewBox is already clipped to the MediaBox, so this stays correct for
+  // CropBoxes that hang outside it.
+  static _boxOf(page: PDFPageProxy): PageBox {
+    return pageBoxFromViewBox(page.getViewport({ scale: 1.0, rotation: 0 }).viewBox);
   }
 
   // Returns the total rotation (PDF base + user) for a page, 0/90/180/270
@@ -101,7 +109,7 @@ export class PDFViewer {
     this.isSleeping  = false;
     this.pages       = [];
     this._annCache   = {};
-    this._pageSizeCache = {}; // reset for the new document
+    this._pageBoxCache = {}; // reset for the new document
     // pageRotations and fieldValues are preserved across sleep/wake cycles
     this.container.innerHTML = '';
 
@@ -237,15 +245,15 @@ export class PDFViewer {
     return page.getViewport({ scale: this.scale, rotation });
   }
 
-  // Returns { width, height } of the unscaled PDF page in native PDF pts (no rotation).
-  // Results are cached so this works even while the viewer is sleeping (pdfDoc is null).
-  async getPageSize(pageNum: number): Promise<{ width: number; height: number }> {
-    if (this._pageSizeCache[pageNum]) return this._pageSizeCache[pageNum];
+  // Returns the displayed region of the unscaled PDF page in native PDF pts (no
+  // rotation) — see PageBox. Results are cached so this works even while the
+  // viewer is sleeping (pdfDoc is null).
+  async getPageBox(pageNum: number): Promise<PageBox> {
+    if (this._pageBoxCache[pageNum]) return this._pageBoxCache[pageNum];
     const page = await this.pdfDoc!.getPage(pageNum);
-    const vp   = page.getViewport({ scale: 1.0, rotation: 0 });
-    const size = { width: vp.width, height: vp.height };
-    this._pageSizeCache[pageNum] = size;
-    return size;
+    const box  = PDFViewer._boxOf(page);
+    this._pageBoxCache[pageNum] = box;
+    return box;
   }
 
   // Returns the PDF outline (bookmarks) array, or null if none
@@ -329,7 +337,7 @@ export class PDFViewer {
   // Swaps width↔height when rotating to/from 90° or 270°.
   _resizePageForRotation(pageNum: number): void {
     const pd     = this.pages[pageNum - 1];
-    const cached = this._pageSizeCache[pageNum];
+    const cached = this._pageBoxCache[pageNum];
     if (!pd || !cached) return;
     const rot = this.getTotalRotation(pageNum);
     const sw  = (rot % 180 === 0) ? cached.width  : cached.height;
@@ -372,10 +380,9 @@ export class PDFViewer {
     const userRot  = this.pageRotations[pageNum] || 0;
     this.pageBaseRotations[pageNum] = page.rotate;
 
-    // Cache unscaled native page size so getPageSize() works while sleeping.
-    if (!this._pageSizeCache[pageNum]) {
-      const vp1 = page.getViewport({ scale: 1.0, rotation: 0 });
-      this._pageSizeCache[pageNum] = { width: vp1.width, height: vp1.height };
+    // Cache the unscaled native page box so getPageBox() works while sleeping.
+    if (!this._pageBoxCache[pageNum]) {
+      this._pageBoxCache[pageNum] = PDFViewer._boxOf(page);
     }
 
     const rotation = (page.rotate + userRot) % 360;
@@ -419,10 +426,9 @@ export class PDFViewer {
     const userRot  = this.pageRotations[pageNum] || 0;
     this.pageBaseRotations[pageNum] = page.rotate; // store for saver
 
-    // Populate the page-size cache on every render (cheap: page object is already fetched).
-    if (!this._pageSizeCache[pageNum]) {
-      const vp1 = page.getViewport({ scale: 1.0, rotation: 0 });
-      this._pageSizeCache[pageNum] = { width: vp1.width, height: vp1.height };
+    // Populate the page-box cache on every render (cheap: page object is already fetched).
+    if (!this._pageBoxCache[pageNum]) {
+      this._pageBoxCache[pageNum] = PDFViewer._boxOf(page);
     }
 
     const rotation = (page.rotate + userRot) % 360;

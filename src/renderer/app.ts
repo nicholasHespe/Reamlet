@@ -87,9 +87,14 @@ const fontSizeInput  = document.getElementById('font-size-input') as HTMLInputEl
 const colorBtn       = document.getElementById('color-btn')!;
 const colorDot       = document.getElementById('color-dot')!;
 const colorPanel     = document.getElementById('color-panel')!;
+const fillBtn        = document.getElementById('fill-btn')!;
+const fillDot        = document.getElementById('fill-dot')!;
+const fillPanel      = document.getElementById('fill-panel')!;
 const titleFilename  = document.getElementById('title-filename')!;
 const contextMenu    = document.getElementById('context-menu')!;
 const inputCtxMenu   = document.getElementById('input-ctx-menu')!;
+const editableCtxMenu = document.getElementById('editable-ctx-menu')!;
+const spellSuggestions = document.getElementById('spell-suggestions')!;
 const ctxCut         = document.querySelector('[data-ctx="cut"]')   as HTMLButtonElement;
 const ctxPaste       = document.querySelector('[data-ctx="paste"]') as HTMLButtonElement;
 const tabContextMenu = document.getElementById('tab-context-menu')!;
@@ -265,12 +270,21 @@ viewerScrollbarThumb.addEventListener('mousedown', (e) => {
 
 colorBtn.addEventListener('click', (e) => {
   e.stopPropagation();
+  fillPanel.classList.add('hidden');
   colorPanel.classList.toggle('hidden');
 });
 
 // Close colour panel when clicking anywhere else
 document.addEventListener('click', () => colorPanel.classList.add('hidden'));
 colorPanel.addEventListener('click', (e) => e.stopPropagation());
+
+fillBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  colorPanel.classList.add('hidden');
+  fillPanel.classList.toggle('hidden');
+});
+document.addEventListener('click', () => fillPanel.classList.add('hidden'));
+fillPanel.addEventListener('click', (e) => e.stopPropagation());
 
 // ── Context menu ───────────────────────────────────────────────
 
@@ -285,6 +299,8 @@ function _hideTabContextMenu() {
 
 viewerHost.addEventListener('contextmenu', (e) => {
   if (!activeTab) return;
+  // Editable fields get their own menu, built from the main-process event.
+  if ((e.target as Element)?.closest('textarea, input, [contenteditable="true"]')) return;
   e.preventDefault();
 
   // Show Cut only when a cuttable annotation is selected; Paste when clipboard has content
@@ -308,6 +324,7 @@ document.addEventListener('mousedown', (e) => {
   if (!(e.target as Element)?.closest('#context-menu'))     _hideContextMenu();
   if (!(e.target as Element)?.closest('#tab-context-menu')) _hideTabContextMenu();
   if (!(e.target as Element)?.closest('#input-ctx-menu'))   inputCtxMenu.classList.add('hidden');
+  if (!(e.target as Element)?.closest('#editable-ctx-menu')) editableCtxMenu.classList.add('hidden');
 });
 
 contextMenu.addEventListener('mousedown', (e) => {
@@ -331,6 +348,54 @@ contextMenu.addEventListener('mousedown', (e) => {
       finder.open();
       break;
     }
+  }
+});
+
+// ── Editable-field context menu (spelling suggestions + editing) ─
+
+let _misspelledWord = '';
+
+window.api.onEditableContextMenu((data) => {
+  _misspelledWord = data.misspelledWord;
+
+  spellSuggestions.replaceChildren(...data.suggestions.map(word => {
+    const btn = document.createElement('button');
+    btn.dataset.editCtx = 'replace';
+    btn.dataset.word    = word;
+    btn.textContent     = word;
+    return btn;
+  }));
+
+  const hasWord = data.misspelledWord !== '';
+  editableCtxMenu.querySelector<HTMLElement>('[data-edit-ctx="add-to-dictionary"]')!
+    .style.display = hasWord ? '' : 'none';
+  editableCtxMenu.querySelector<HTMLElement>('[data-spell-sep]')!
+    .style.display = hasWord ? '' : 'none';
+
+  for (const [cmd, allowed] of [['cut', data.canCut], ['copy', data.canCopy], ['paste', data.canPaste]] as const) {
+    (editableCtxMenu.querySelector(`[data-edit-ctx="${cmd}"]`) as HTMLButtonElement).disabled = !allowed;
+  }
+
+  _hideContextMenu();
+  editableCtxMenu.classList.remove('hidden');
+  const menuW = editableCtxMenu.offsetWidth  || 160;
+  const menuH = editableCtxMenu.offsetHeight || 120;
+  editableCtxMenu.style.left = `${Math.max(0, Math.min(data.x, window.innerWidth  - menuW - 4))}px`;
+  editableCtxMenu.style.top  = `${Math.max(0, Math.min(data.y, window.innerHeight - menuH - 4))}px`;
+});
+
+// mousedown with the default prevented, so the field keeps focus.
+editableCtxMenu.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const btn = (e.target as Element)?.closest('[data-edit-ctx]') as HTMLElement | null;
+  if (!btn) return;
+  editableCtxMenu.classList.add('hidden');
+  switch (btn.dataset.editCtx) {
+    case 'replace':           window.api.replaceMisspelling(btn.dataset.word ?? ''); break;
+    case 'add-to-dictionary': window.api.addToDictionary(_misspelledWord);           break;
+    case 'cut':               window.api.editableCommand('cut');                     break;
+    case 'copy':              window.api.editableCommand('copy');                    break;
+    case 'paste':             window.api.editableCommand('paste');                   break;
   }
 });
 
@@ -475,7 +540,7 @@ document.addEventListener('mouseup', () => {
 
 let _nextTabId = 1;
 
-function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array): Tab {
+function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array, sourceUrl: string | null = null): Tab {
   const id = _nextTabId++;
 
   const pane  = document.createElement('div');
@@ -495,7 +560,7 @@ function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array): 
   const viewer   = new PDFViewer(pages);
   const pdfBytes = pdfData instanceof Uint8Array ? pdfData.slice() : new Uint8Array(pdfData);
 
-  const state: Tab = { id, filePath, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
+  const state: Tab = { id, filePath, sourceUrl, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
   // A deferred (off-screen) page render clears that page's annotation canvas as a
   // side effect of resizing it — repaint from the live annotator so annotations
   // don't disappear when a page scrolled off-screen during zoom/rotate comes back
@@ -722,6 +787,7 @@ function switchTab(tab: Tab) {
   }
 
   syncSwatches(tab.annotator?.color);
+  syncFillSwatches(tab.annotator?.fillColor);
   renderToc(tab.outline);
   updatePageDisplay(tab);
   attachScrollListener(tab);
@@ -840,6 +906,7 @@ async function _wakeTab(tab: Tab) {
     syncToolButtons(tab.annotator!.tool);
     syncTextFormatButtons(tab.annotator!);
     syncSwatches(tab.annotator!.color);
+    syncFillSwatches(tab.annotator!.fillColor);
     renderToc(tab.outline);
     updatePageDisplay(tab);
     attachScrollListener(tab);
@@ -892,6 +959,7 @@ async function _loadTabContent(tab: Tab, preserveView = false) {
     syncToolButtons(tab.annotator!.tool);
     syncTextFormatButtons(tab.annotator!);
     syncSwatches(tab.annotator!.color);
+    syncFillSwatches(tab.annotator!.fillColor);
     renderToc(tab.outline);
     updatePageDisplay(tab);
     _syncScrollbar();
@@ -916,11 +984,35 @@ async function _reloadAfterSave(tab: Tab) {
 
 // ── Open / Save ────────────────────────────────────────────────
 
-// Return an already-open tab for the given absolute file path, or null.
-// Used to avoid opening duplicate tabs for the same file.
-function _findOpenTab(filePath: string | null) {
+// Loaded once at startup so open flows can check it synchronously.
+let _reuseOpenTab = true;
+window.api.getReuseTabSetting().then(({ enabled }) => {
+  _reuseOpenTab = enabled;
+  _syncReuseTabMenu();
+});
+
+function _syncReuseTabMenu() {
+  document.querySelectorAll('[data-toggle="reuse-tab"]').forEach(btn => {
+    btn.classList.toggle('active', _reuseOpenTab);
+  });
+}
+
+async function _toggleReuseTab() {
+  _reuseOpenTab = !_reuseOpenTab;
+  _syncReuseTabMenu();
+  await window.api.setReuseTabSetting(_reuseOpenTab);
+}
+
+// Return an already-open, unmodified tab for the given file path or source
+// URL, or null.
+function _findOpenTab(filePath: string | null, sourceUrl: string | null = null) {
+  if (!_reuseOpenTab) return null;
+  if (sourceUrl) {
+    const bySource = tabs.find(t => t.sourceUrl === sourceUrl && !t.dirty);
+    if (bySource) return bySource;
+  }
   if (!filePath || !/[\\/]/.test(filePath)) return null;
-  return tabs.find(t => t.filePath === filePath) ?? null;
+  return tabs.find(t => t.filePath === filePath && !t.dirty) ?? null;
 }
 
 async function openFile() {
@@ -1515,10 +1607,21 @@ function syncTextFormatButtons(annotator: Annotator) {
 
 function syncSwatches(color: string | undefined) {
   if (!color) return;
-  document.querySelectorAll('.swatch').forEach(s => {
+  colorPanel.querySelectorAll('.swatch').forEach(s => {
     s.classList.toggle('active', (s as HTMLElement).dataset.color === color);
   });
   colorDot.style.background = color;
+}
+
+// null means no fill — the "none" swatch, rather than any colour, is active.
+function syncFillSwatches(fillColor: string | null | undefined) {
+  if (fillColor === undefined) return;
+  fillPanel.querySelectorAll('.swatch').forEach(s => {
+    const swatchColor = (s as HTMLElement).dataset.color === 'none' ? null : (s as HTMLElement).dataset.color;
+    s.classList.toggle('active', swatchColor === fillColor);
+  });
+  fillDot.classList.toggle('fill-none', !fillColor);
+  if (fillColor) fillDot.style.background = fillColor;
 }
 
 // ── Toolbar event wiring ───────────────────────────────────────
@@ -1531,12 +1634,22 @@ document.querySelectorAll('.tool-btn').forEach(btn => {
   });
 });
 
-document.querySelectorAll('.swatch').forEach(s => {
+colorPanel.querySelectorAll('.swatch').forEach(s => {
   s.addEventListener('click', () => {
     const color = (s as HTMLElement).dataset.color ?? '';
     if (activeTab?.annotator) activeTab.annotator.setColor(color);
     syncSwatches(color);
     colorPanel.classList.add('hidden');
+  });
+});
+
+fillPanel.querySelectorAll('.swatch').forEach(s => {
+  s.addEventListener('click', () => {
+    const raw   = (s as HTMLElement).dataset.color ?? 'none';
+    const color = raw === 'none' ? null : raw;
+    if (activeTab?.annotator) activeTab.annotator.setFillColor(color);
+    syncFillSwatches(color);
+    fillPanel.classList.add('hidden');
   });
 });
 
@@ -1692,6 +1805,7 @@ const _menuActions = {
   'theme-light':  () => _setTheme('light'),
   'theme-dark':   () => _setTheme('dark'),
   'theme-system': () => _setTheme('system'),
+  'toggle-reuse-tab': () => _toggleReuseTab(),
 };
 
 function _closeAllDropdowns() {
@@ -1809,11 +1923,12 @@ inputCtxMenu.addEventListener('mousedown', (e) => {
   }
 });
 
-// Receive file data when this window was opened for a dragged-out tab
-window.api.onOpenFileData(async ({ filePath, buffer }) => {
-  const existing = _findOpenTab(filePath);
+// Receive file data when this window was opened for a dragged-out tab, or a
+// file/URL forwarded here from elsewhere.
+window.api.onOpenFileData(async ({ filePath, buffer, sourceUrl }) => {
+  const existing = _findOpenTab(filePath, sourceUrl);
   if (existing) { switchTab(existing); return; }
-  const tab = createTab(filePath, buffer);
+  const tab = createTab(filePath, buffer, sourceUrl);
   renderTabBar();
   switchTab(tab);
   await _loadTabContent(tab);
