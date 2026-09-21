@@ -70,6 +70,8 @@ interface FindCacheEntry {
 export interface Tab {
   id: number;
   filePath: string | null;
+  /** Origin URL for a document opened from the web; null for a local file. */
+  sourceUrl: string | null;
   pdfBytes: Uint8Array;
   viewer: PDFViewer;
   annotator: Annotator | null;

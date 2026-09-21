@@ -12,11 +12,13 @@ interface Window {
     notifyTabTransferred: (sourceWindowId: number, filePath: string) => Promise<{ ok: boolean }>;
     getExtensionId: () => Promise<{ ok: boolean; id?: string; error?: string }>;
     setExtensionId: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    getReuseTabSetting: () => Promise<{ enabled: boolean }>;
+    setReuseTabSetting: (enabled: boolean) => Promise<{ ok: boolean }>;
     getTheme: () => Promise<{ mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }>;
     setTheme: (mode: 'light' | 'dark' | 'system') => Promise<{ ok: boolean; error?: string }>;
     onThemeUpdated: (callback: (data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => void) => void;
     onMenuEvent: (callback: (event: string) => void) => void;
-    onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer }) => void) => void;
+    onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => void) => void;
     onCloseTabByFilepath: (callback: (filePath: string) => void) => void;
     copyFileToClipboard: (filePath: string) => Promise<{ ok: boolean }>;
     revealInExplorer:    (filePath: string) => Promise<{ ok: boolean }>;

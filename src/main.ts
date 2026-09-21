@@ -16,7 +16,10 @@ const https = require('https');
 
 const isMac = process.platform === 'darwin';
 
-function createWindow(openFilePath: string | null, showInactive = false): BW {
+/** A document to open in a freshly created window, with its web origin when it came from one. */
+interface OpenTarget { filePath: string; sourceUrl: string | null }
+
+function createWindow(openTarget: OpenTarget | null, showInactive = false): BW {
   const win = new BrowserWindow({
     show: false,
     width: 1280,
@@ -52,13 +55,14 @@ function createWindow(openFilePath: string | null, showInactive = false): BW {
     win.webContents.send('before-close');
   });
 
-  if (openFilePath) {
+  if (openTarget) {
     win.webContents.once('did-finish-load', () => {
       try {
-        const buffer = fs.readFileSync(openFilePath);
+        const buffer = fs.readFileSync(openTarget.filePath);
         win.webContents.send('open-file-data', {
-          filePath: openFilePath,
-          buffer:   buffer.buffer,
+          filePath:  openTarget.filePath,
+          buffer:    buffer.buffer,
+          sourceUrl: openTarget.sourceUrl,
         });
       } catch { /* ignore */ }
     });
@@ -163,7 +167,7 @@ ipcMain.handle('save-file-copy', async (event: IpcMainInvokeEvent, arrayBuffer: 
 
 // Open a new Reamlet window, optionally pre-loading a file
 ipcMain.handle('open-new-window', (_event: IpcMainInvokeEvent, filePath?: string) => {
-  createWindow(filePath || null);
+  createWindow(filePath ? { filePath, sourceUrl: null } : null);
   return { ok: true };
 });
 
@@ -395,6 +399,20 @@ function effectiveTheme(): 'light' | 'dark' {
   return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
 }
 
+// ── "Switch to already-open tab" setting ─────────────────────────
+
+ipcMain.handle('get-reuse-tab-setting', () => {
+  const settings = readUserDataSettings();
+  return { enabled: settings.reuseOpenTab !== false };
+});
+
+ipcMain.handle('set-reuse-tab-setting', (_event: IpcMainInvokeEvent, enabled: boolean) => {
+  const settings = readUserDataSettings();
+  settings.reuseOpenTab = enabled;
+  writeUserDataSettings(settings);
+  return { ok: true };
+});
+
 ipcMain.handle('get-theme', () => ({
   mode:      nativeTheme.themeSource as ThemeMode,
   effective: effectiveTheme(),
@@ -443,10 +461,10 @@ app.on('open-file', (e: ElectronEvent, filePath: string) => {
     win.focus();
     try {
       const buffer = fs.readFileSync(filePath);
-      win.webContents.send('open-file-data', { filePath, buffer: buffer.buffer });
+      win.webContents.send('open-file-data', { filePath, buffer: buffer.buffer, sourceUrl: null });
     } catch { /* ignore */ }
   } else {
-    createWindow(filePath);
+    createWindow({ filePath, sourceUrl: null });
   }
 });
 
@@ -549,7 +567,7 @@ function downloadPdfToTemp(url: string, redirectsLeft = 5): Promise<string> {
 }
 
 // Resolve a target (URL or local path) to a local file path ready for opening.
-async function resolveTarget(target: string): Promise<string | null> {
+async function resolveTarget(target: string): Promise<OpenTarget | null> {
   if (isHttpUrl(target)) {
     try {
       const filePath = await downloadPdfToTemp(target);
@@ -559,13 +577,13 @@ async function resolveTarget(target: string): Promise<string | null> {
         message: `Downloaded to:\n${filePath}`,
         buttons: ['OK'],
       });
-      return filePath;
+      return { filePath, sourceUrl: target };
     } catch (err) {
       dialog.showErrorBox('Reamlet — Could not open URL', (err as Error).message ?? 'Download failed.');
       return null;
     }
   }
-  return target;
+  return { filePath: target, sourceUrl: null };
 }
 
 // Single-instance lock: if another Reamlet is already running, forward the
@@ -587,11 +605,15 @@ if (!gotLock) {
       win.focus();
     }
     if (target) {
-      const filePath = await resolveTarget(target);
-      if (filePath) {
+      const resolved = await resolveTarget(target);
+      if (resolved) {
         try {
-          const buffer = fs.readFileSync(filePath);
-          win.webContents.send('open-file-data', { filePath, buffer: buffer.buffer });
+          const buffer = fs.readFileSync(resolved.filePath);
+          win.webContents.send('open-file-data', {
+            filePath:  resolved.filePath,
+            buffer:    buffer.buffer,
+            sourceUrl: resolved.sourceUrl,
+          });
         } catch { /* ignore */ }
       }
     }
@@ -602,9 +624,9 @@ if (!gotLock) {
     restoreThemeSource();
     const pendingTarget = _pendingOpenFile || getArgvTarget(process.argv);
     _pendingOpenFile = null;
-    const openPath   = pendingTarget ? await resolveTarget(pendingTarget) : null;
-    const background = process.argv.includes('--background');
-    createWindow(openPath, background);
+    const openTarget  = pendingTarget ? await resolveTarget(pendingTarget) : null;
+    const background  = process.argv.includes('--background');
+    createWindow(openTarget, background);
     buildMenu();
   });
 
