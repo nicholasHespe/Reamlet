@@ -7,8 +7,10 @@ import * as _pdfLib from '../../node_modules/pdf-lib/dist/pdf-lib.esm.js';
 import type * as PDFLibNS from 'pdf-lib';
 import type { Annotation, DrawAnnotation, HighlightAnnotation, TextAnnotation, ShapeAnnotation } from './types.js';
 import type { PDFViewer } from './viewer.js';
-import { toPdfCoords, displayHeight, type PageBox } from './page-box.js';
-import { TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness } from './annotator.js';
+import { toPdfCoords, displaySize, type PageBox } from './page-box.js';
+import {
+  TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness, wrapText,
+} from './text-layout.js';
 
 // Cast the direct-path runtime import to the pdf-lib type surface
 const { PDFDocument, PDFName, PDFArray, PDFNumber, degrees, rgb, StandardFonts } =
@@ -191,8 +193,8 @@ function _addHighlightAnnotation(pdfPage: PDFPage, ann: HighlightAnnotation, box
 
 /**
  * Draw a text annotation into the page's content stream, one line at a time, at
- * exactly the baselines the canvas overlay used (see annotator.ts's shared
- * textBaselineOffset).
+ * exactly the baselines the canvas overlay used and wrapped to the same box
+ * width (see text-layout.ts, which both sides share).
  *
  * This deliberately does not emit a FreeText annotation. A FreeText without an
  * appearance stream is laid out by whichever viewer opens the file — it gets
@@ -208,12 +210,16 @@ function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox
   const font  = ann.bold ? fonts.bold : fonts.regular;
   const size  = ann.fontSize;
 
-  const displayH = displayHeight(box, rot);
+  const display = displaySize(box, rot);
 
-  ann.text.split('\n').forEach((line, i) => {
+  // Reflow inside the stored box width, using the embedded font's metrics.
+  const lines = wrapText(ann.text, ann.width * display.width,
+                         (s) => font.widthOfTextAtSize(s, size));
+
+  lines.forEach((line, i) => {
     if (!line) return;
     const baselineFromTop = textBaselineOffset(size, i);
-    const [x, y] = toPdfCoords(ann.x, ann.y + baselineFromTop / displayH, box, rot);
+    const [x, y] = toPdfCoords(ann.x, ann.y + baselineFromTop / display.height, box, rot);
 
     // A page displayed with /Rotate R turns its content R° clockwise, so the
     // text has to be turned R° counter-clockwise to come out upright.
@@ -223,7 +229,7 @@ function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox
       const thickness = textUnderlineThickness(size);
       const [ux, uy] = toPdfCoords(
         ann.x,
-        ann.y + (baselineFromTop + TEXT_LINE_GAP + thickness) / displayH,
+        ann.y + (baselineFromTop + TEXT_LINE_GAP + thickness) / display.height,
         box, rot,
       );
       pdfPage.drawRectangle({

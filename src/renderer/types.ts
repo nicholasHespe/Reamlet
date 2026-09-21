@@ -39,6 +39,8 @@ export interface TextAnnotation {
   pageNum: number;
   x: number;
   y: number;
+  /** Width of the text box, as a fraction of the displayed page width. */
+  width: number;
   color: string;
   fontSize: number;
   bold: boolean;
