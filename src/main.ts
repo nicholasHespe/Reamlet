@@ -3,7 +3,7 @@
 
 'use strict';
 
-import type { BrowserWindow as BW, NativeImage, IpcMainInvokeEvent, IpcMainEvent, Event as ElectronEvent } from 'electron';
+import type { BrowserWindow as BW, NativeImage, IpcMainInvokeEvent, IpcMainEvent, Event as ElectronEvent, ContextMenuParams } from 'electron';
 
 const { app, BrowserWindow, ipcMain, dialog, Menu, nativeImage, nativeTheme, shell } = require('electron');
 const { execFile } = require('child_process');
@@ -46,6 +46,8 @@ function createWindow(openTarget: OpenTarget | null, showInactive = false): BW {
     if (showInactive) win.showInactive();
     else win.show();
   });
+
+  wireEditableContextMenu(win);
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
@@ -329,6 +331,54 @@ ipcMain.handle('execute-print', (_event: IpcMainInvokeEvent, options: {
 function getManifestPath(): string {
   return path.join(path.dirname(process.execPath), 'com.reamlet.chromebridge.json');
 }
+
+// ── Spell-check suggestions ──────────────────────────────────────
+// Chromium reports the misspelled word and its suggestions only through this
+// event, so they're relayed to the renderer to build its own menu with.
+
+/** How many candidates to offer; Chromium usually returns a handful more. */
+const MAX_SPELLING_SUGGESTIONS = 5;
+
+export interface EditableContextMenu {
+  x: number;
+  y: number;
+  misspelledWord: string;
+  suggestions: string[];
+  canCut: boolean;
+  canCopy: boolean;
+  canPaste: boolean;
+}
+
+function wireEditableContextMenu(win: BW): void {
+  win.webContents.on('context-menu', (_e: ElectronEvent, params: ContextMenuParams) => {
+    if (!params.isEditable) return;
+    const payload: EditableContextMenu = {
+      x: params.x,
+      y: params.y,
+      misspelledWord: params.misspelledWord,
+      suggestions:    params.dictionarySuggestions.slice(0, MAX_SPELLING_SUGGESTIONS),
+      canCut:         params.editFlags.canCut,
+      canCopy:        params.editFlags.canCopy,
+      canPaste:       params.editFlags.canPaste,
+    };
+    win.webContents.send('editable-context-menu', payload);
+  });
+}
+
+// A native edit on the focused field, so it joins the undo stack.
+ipcMain.on('replace-misspelling', (e: IpcMainEvent, word: string) => {
+  e.sender.replaceMisspelling(word);
+});
+
+ipcMain.on('add-to-dictionary', (e: IpcMainEvent, word: string) => {
+  e.sender.session.addWordToSpellCheckerDictionary(word);
+});
+
+ipcMain.on('editable-edit', (e: IpcMainEvent, command: 'cut' | 'copy' | 'paste') => {
+  if      (command === 'cut')   e.sender.cut();
+  else if (command === 'copy')  e.sender.copy();
+  else if (command === 'paste') e.sender.paste();
+});
 
 // Persist user settings (e.g. extensionId) in userData so they survive reinstalls.
 function getUserDataSettingsPath(): string {

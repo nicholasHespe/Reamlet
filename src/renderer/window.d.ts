@@ -1,5 +1,15 @@
 // Type declaration for window.api exposed by preload.ts via contextBridge
 
+interface EditableContextMenuData {
+  x: number;
+  y: number;
+  misspelledWord: string;
+  suggestions: string[];
+  canCut: boolean;
+  canCopy: boolean;
+  canPaste: boolean;
+}
+
 interface Window {
   api: {
     openFileDialog: () => Promise<{ filePath: string; buffer: ArrayBuffer }[] | null>;
@@ -17,6 +27,10 @@ interface Window {
     getTheme: () => Promise<{ mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }>;
     setTheme: (mode: 'light' | 'dark' | 'system') => Promise<{ ok: boolean; error?: string }>;
     onThemeUpdated: (callback: (data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => void) => void;
+    onEditableContextMenu: (callback: (data: EditableContextMenuData) => void) => void;
+    replaceMisspelling: (word: string) => void;
+    addToDictionary:    (word: string) => void;
+    editableCommand:    (command: 'cut' | 'copy' | 'paste') => void;
     onMenuEvent: (callback: (event: string) => void) => void;
     onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => void) => void;
     onCloseTabByFilepath: (callback: (filePath: string) => void) => void;
