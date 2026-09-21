@@ -5,9 +5,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -47,11 +47,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Run ESLint on the src/ directory
-      # Why just src/? The renderer/ folder is plain JS/HTML that
+      # Run ESLint on the sources and the test suite.
+      # Why not renderer/? That folder is plain JS/HTML that
       # isn't part of the TypeScript project — lint what you own.
       - name: Lint
-        run: pnpm exec eslint src/
+        run: pnpm exec eslint src/ test/
 
   # ──────────────────────────────
   #  Type-check
@@ -89,13 +89,50 @@ jobs:
         run: pnpm exec tsc -p tsconfig.renderer.json --noEmit
 
   # ──────────────────────────────
+  #  Tests
+  # ──────────────────────────────
+  # Saved-annotation geometry is easy to break without noticing: nothing on
+  # screen changes, only the coordinates written into the file. These tests
+  # embed annotations into synthetic pages of many shapes and read the
+  # coordinates back out, so a bad transform fails here instead of in a user's
+  # saved document.
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: pnpm test
+
+  # ──────────────────────────────
   #  Build 
   # ──────────────────────────────
 
   # Linux smoke test (fast, cheap — catches most packaging bugs)
   build-linux:
     name: Build (Linux)
-    needs: [lint, typecheck]          # Only if lint + types pass
+    needs: [lint, typecheck, test]    # Only if lint, types and tests pass
     runs-on: ubuntu-latest
 
     steps:
@@ -131,7 +168,7 @@ jobs:
   # Windows build — the real deal for your target platform
   build-windows:
     name: Build (Windows)
-    needs: [lint, typecheck]
+    needs: [lint, typecheck, test]
     runs-on: windows-latest           # Windows runner
 
     steps:

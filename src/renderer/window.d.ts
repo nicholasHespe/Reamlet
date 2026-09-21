@@ -12,6 +12,9 @@ interface Window {
     notifyTabTransferred: (sourceWindowId: number, filePath: string) => Promise<{ ok: boolean }>;
     getExtensionId: () => Promise<{ ok: boolean; id?: string; error?: string }>;
     setExtensionId: (id: string) => Promise<{ ok: boolean; error?: string }>;
+    getTheme: () => Promise<{ mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }>;
+    setTheme: (mode: 'light' | 'dark' | 'system') => Promise<{ ok: boolean; error?: string }>;
+    onThemeUpdated: (callback: (data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => void) => void;
     onMenuEvent: (callback: (event: string) => void) => void;
     onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer }) => void) => void;
     onCloseTabByFilepath: (callback: (filePath: string) => void) => void;
@@ -29,6 +32,7 @@ interface Window {
       duplexMode:  'simplex' | 'longEdge' | 'shortEdge';
       scaleFactor: number;
       landscape:   boolean;
+      pageSize:    { width: number; height: number }; // microns
     }) => Promise<{ ok: boolean; error?: string }>;
     startDrag: (filePath: string) => void;
     setUiZoom: (factor: number) => void;

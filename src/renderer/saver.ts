@@ -7,13 +7,19 @@ import * as _pdfLib from '../../node_modules/pdf-lib/dist/pdf-lib.esm.js';
 import type * as PDFLibNS from 'pdf-lib';
 import type { Annotation, DrawAnnotation, HighlightAnnotation, TextAnnotation, ShapeAnnotation } from './types.js';
 import type { PDFViewer } from './viewer.js';
+import { toPdfCoords, displayHeight, type PageBox } from './page-box.js';
+import { TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness } from './annotator.js';
 
 // Cast the direct-path runtime import to the pdf-lib type surface
-const { PDFDocument, PDFName, PDFArray, PDFNumber, PDFString, degrees, rgb, StandardFonts } =
+const { PDFDocument, PDFName, PDFArray, PDFNumber, degrees, rgb, StandardFonts } =
   _pdfLib as unknown as typeof PDFLibNS;
 
 type PDFDoc  = import('pdf-lib').PDFDocument;
 type PDFPage = import('pdf-lib').PDFPage;
+type PDFFont = import('pdf-lib').PDFFont;
+
+/** Helvetica + Helvetica-Bold, embedded once per document and shared by every text annotation. */
+interface TextFonts { regular: PDFFont; bold: PDFFont }
 
 /**
  * Embed annotations into a PDF and return the modified bytes.
@@ -45,6 +51,17 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
     } catch { /* PDF has no AcroForm — ignore */ }
   }
 
+  // Text is drawn into the page content stream (not left to a viewer-generated
+  // annotation appearance), so the fonts must be embedded up front. Only do it
+  // when there is text to draw, to avoid touching documents that have none.
+  let textFonts: TextFonts | null = null;
+  if (annotations.some(a => a.type === 'text')) {
+    textFonts = {
+      regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
+      bold:    await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+    };
+  }
+
   for (let pageIdx = 0; pageIdx < pdfDoc.getPageCount(); pageIdx++) {
     const pageNum = pageIdx + 1;
     const pdfPage: PDFPage = pdfDoc.getPage(pageIdx);
@@ -59,18 +76,18 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
     const pageAnns = annotations.filter(a => a.pageNum === pageNum);
     if (pageAnns.length === 0) continue;
 
-    const { width: pdfW, height: pdfH } = await viewer.getPageSize(pageNum);
+    const box      = await viewer.getPageBox(pageNum);
     const totalRot = viewer.getTotalRotation(pageNum);
 
     for (const ann of pageAnns) {
-      if      (ann.type === 'draw')          _addInkAnnotation      (pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'freeHighlight') _addInkAnnotation      (pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'highlight')     _addHighlightAnnotation(pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'text')          _addFreeTextAnnotation (pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'line')          _addLineAnnotation     (pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'arrow')         _addArrowAnnotation    (pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'rect')          _addSquareAnnotation   (pdfPage, ann,           pdfW, pdfH, totalRot);
-      else if (ann.type === 'oval')          _addCircleAnnotation   (pdfPage, ann,           pdfW, pdfH, totalRot);
+      if      (ann.type === 'draw')          _addInkAnnotation      (pdfPage, ann,           box, totalRot);
+      else if (ann.type === 'freeHighlight') _addInkAnnotation      (pdfPage, ann,           box, totalRot);
+      else if (ann.type === 'highlight')     _addHighlightAnnotation(pdfPage, ann,           box, totalRot);
+      else if (ann.type === 'text')          _drawTextAnnotation    (pdfPage, ann,           box, totalRot, textFonts!);
+      else if (ann.type === 'line')          _addLineAnnotation     (pdfPage, ann,           box, totalRot);
+      else if (ann.type === 'arrow')         _addArrowAnnotation    (pdfPage, ann,           box, totalRot);
+      else if (ann.type === 'rect')          _addSquareAnnotation   (pdfPage, ann,           box, totalRot);
+      else if (ann.type === 'oval')          _addCircleAnnotation   (pdfPage, ann,           box, totalRot);
     }
   }
 
@@ -80,23 +97,26 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
 // ── Coordinate helpers ───────────────────────────────────────
 
 /**
- * Convert normalised canvas coords (0–1, y-down) to PDF pts (y-up),
- * accounting for page rotation.
- *
- * Rotation is the total display rotation (base PDF /Rotate + user rotation).
- * Formulas derived from inverting the PDF.js viewport transform:
- *   rot=0:   pdf = (nx·W,     (1-ny)·H)
- *   rot=90:  pdf = (ny·W,     nx·H)
- *   rot=180: pdf = ((1-nx)·W, ny·H)
- *   rot=270: pdf = ((1-ny)·W, (1-nx)·H)
+ * The visible box of a pdf-lib page — the CropBox clipped to the MediaBox, with
+ * either box's corners normalised in case they were written the other way round.
  */
-function toPdfCoords(nx: number, ny: number, pdfW: number, pdfH: number, rot: number): [number, number] {
-  switch ((rot || 0) % 360) {
-    case 90:  return [       ny * pdfW,        nx * pdfH];
-    case 180: return [(1 - nx) * pdfW,        ny * pdfH];
-    case 270: return [(1 - ny) * pdfW, (1 - nx) * pdfH];
-    default:  return [       nx * pdfW, (1 - ny) * pdfH];
+function visibleBox(page: PDFPage): PageBox {
+  const norm = (b: { x: number; y: number; width: number; height: number }) => ({
+    x0: Math.min(b.x, b.x + b.width),
+    y0: Math.min(b.y, b.y + b.height),
+    x1: Math.max(b.x, b.x + b.width),
+    y1: Math.max(b.y, b.y + b.height),
+  });
+  const media = norm(page.getMediaBox());
+  const crop  = norm(page.getCropBox());
+  const x0 = Math.max(media.x0, crop.x0), x1 = Math.min(media.x1, crop.x1);
+  const y0 = Math.max(media.y0, crop.y0), y1 = Math.min(media.y1, crop.y1);
+  // An empty intersection means the boxes disagree beyond repair; the MediaBox
+  // is the one the spec guarantees, so fall back to it rather than to nothing.
+  if (x1 <= x0 || y1 <= y0) {
+    return { x: media.x0, y: media.y0, width: media.x1 - media.x0, height: media.y1 - media.y0 };
   }
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
 function hexToRgb01(hex: string): { r: number; g: number; b: number } {
@@ -108,17 +128,17 @@ function hexToRgb01(hex: string): { r: number; g: number; b: number } {
 
 // ── Annotation writers ───────────────────────────────────────
 
-function _addInkAnnotation(pdfPage: PDFPage, ann: DrawAnnotation, pdfW: number, pdfH: number, rot: number): void {
+function _addInkAnnotation(pdfPage: PDFPage, ann: DrawAnnotation, box: PageBox, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
 
   const inkPoints = ann.points.flatMap(([nx, ny]: [number, number]) => {
-    const [x, y] = toPdfCoords(nx, ny, pdfW, pdfH, rot);
+    const [x, y] = toPdfCoords(nx, ny, box, rot);
     return [PDFNumber.of(x), PDFNumber.of(y)];
   });
   const inkListEntry = pdfPage.doc.context.obj(inkPoints);
   const inkList      = pdfPage.doc.context.obj([inkListEntry]);
 
-  const pdfPts = ann.points.map(([nx, ny]: [number, number]) => toPdfCoords(nx, ny, pdfW, pdfH, rot));
+  const pdfPts = ann.points.map(([nx, ny]: [number, number]) => toPdfCoords(nx, ny, box, rot));
   const xs  = pdfPts.map(([x]: [number, number]) => x);
   const ys  = pdfPts.map(([, y]: [number, number]) => y);
   const pad = ann.thickness;
@@ -137,15 +157,15 @@ function _addInkAnnotation(pdfPage: PDFPage, ann: DrawAnnotation, pdfW: number, 
   _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addHighlightAnnotation(pdfPage: PDFPage, ann: HighlightAnnotation, pdfW: number, pdfH: number, rot: number): void {
+function _addHighlightAnnotation(pdfPage: PDFPage, ann: HighlightAnnotation, box: PageBox, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
 
   for (const rect of ann.rects) {
     // All four corners of the highlight rect in normalised coords
-    const tl = toPdfCoords(rect.x,             rect.y,              pdfW, pdfH, rot);
-    const tr = toPdfCoords(rect.x + rect.width, rect.y,             pdfW, pdfH, rot);
-    const bl = toPdfCoords(rect.x,             rect.y + rect.height, pdfW, pdfH, rot);
-    const br = toPdfCoords(rect.x + rect.width, rect.y + rect.height, pdfW, pdfH, rot);
+    const tl = toPdfCoords(rect.x,              rect.y,               box, rot);
+    const tr = toPdfCoords(rect.x + rect.width, rect.y,               box, rot);
+    const bl = toPdfCoords(rect.x,              rect.y + rect.height, box, rot);
+    const br = toPdfCoords(rect.x + rect.width, rect.y + rect.height, box, rot);
 
     const allX = [tl[0], tr[0], bl[0], br[0]];
     const allY = [tl[1], tr[1], bl[1], br[1]];
@@ -169,29 +189,75 @@ function _addHighlightAnnotation(pdfPage: PDFPage, ann: HighlightAnnotation, pdf
   }
 }
 
-function _addFreeTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, pdfW: number, pdfH: number, rot: number): void {
+/**
+ * Draw a text annotation into the page's content stream, one line at a time, at
+ * exactly the baselines the canvas overlay used (see annotator.ts's shared
+ * textBaselineOffset).
+ *
+ * This deliberately does not emit a FreeText annotation. A FreeText without an
+ * appearance stream is laid out by whichever viewer opens the file — it gets
+ * top-aligned inside its /Rect with viewer-chosen padding, wrapped to the /Rect
+ * width, and rendered in the single font named by /DA. That is why saved text
+ * used to land below and right of where it was placed, lost its bold and
+ * underline, and wrapped once a line grew past the box. Drawing the glyphs
+ * ourselves is what makes the saved file match the screen.
+ */
+function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox, rot: number, fonts: TextFonts): void {
   const { r, g, b } = hexToRgb01(ann.color);
-  const [px, py] = toPdfCoords(ann.x, ann.y, pdfW, pdfH, rot);
-  const boxH = ann.fontSize * 2 + 4;
+  const color = rgb(r, g, b);
+  const font  = ann.bold ? fonts.bold : fonts.regular;
+  const size  = ann.fontSize;
 
-  const da = `${r.toFixed(2)} ${g.toFixed(2)} ${b.toFixed(2)} rg /Helvetica ${ann.fontSize} Tf`;
+  const displayH = displayHeight(box, rot);
 
-  const annotDict = pdfPage.doc.context.obj({
-    Type:     PDFName.of('Annot'),
-    Subtype:  PDFName.of('FreeText'),
-    Rect:     [px, py - boxH, px + 200, py],
-    Contents: PDFString.of(ann.text),
-    DA:       PDFString.of(da),
-    F:        PDFNumber.of(4),
+  ann.text.split('\n').forEach((line, i) => {
+    if (!line) return;
+    const baselineFromTop = textBaselineOffset(size, i);
+    const [x, y] = toPdfCoords(ann.x, ann.y + baselineFromTop / displayH, box, rot);
+
+    // A page displayed with /Rotate R turns its content R° clockwise, so the
+    // text has to be turned R° counter-clockwise to come out upright.
+    _drawTextSafely(pdfPage, line, { x, y, size, font, color, rotate: degrees(rot) });
+
+    if (ann.underline) {
+      const thickness = textUnderlineThickness(size);
+      const [ux, uy] = toPdfCoords(
+        ann.x,
+        ann.y + (baselineFromTop + TEXT_LINE_GAP + thickness) / displayH,
+        box, rot,
+      );
+      pdfPage.drawRectangle({
+        x: ux, y: uy,
+        width:  font.widthOfTextAtSize(line, size),
+        height: thickness,
+        color,
+        rotate: degrees(rot),
+      });
+    }
   });
-
-  _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
+/**
+ * Helvetica can only encode WinAnsi characters. Rather than fail the whole save
+ * on one stray glyph, fall back to a sanitised line so the rest of the text —
+ * and every other annotation in the document — still gets written.
+ */
+function _drawTextSafely(pdfPage: PDFPage, line: string, options: Parameters<PDFPage['drawText']>[1]): void {
+  try {
+    pdfPage.drawText(line, options);
+  } catch {
+    const font = options!.font!;
+    const safe = [...line]
+      .map(ch => { try { font.encodeText(ch); return ch; } catch { return '?'; } })
+      .join('');
+    try { pdfPage.drawText(safe, options); } catch { /* give up on this line */ }
+  }
+}
+
+function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
+  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
+  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
   const pad = ann.thickness;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
@@ -205,10 +271,10 @@ function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number
   _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addArrowAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
+function _addArrowAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
+  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
+  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
   const pad = ann.thickness * 5;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
@@ -223,14 +289,17 @@ function _addArrowAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: numbe
   _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
+function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
+  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
+  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
+  // A Square's border is drawn inside its /Rect, whereas the canvas centres the
+  // stroke on the path — grow the rect by half the stroke so both line up.
+  const pad = ann.thickness / 2;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Square'),
-    Rect:    [Math.min(x1,x2), Math.min(y1,y2), Math.max(x1,x2), Math.max(y1,y2)],
+    Rect:    [Math.min(x1,x2) - pad, Math.min(y1,y2) - pad, Math.max(x1,x2) + pad, Math.max(y1,y2) + pad],
     BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     F:       PDFNumber.of(4),
@@ -238,14 +307,16 @@ function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: numb
   _appendAnnotation(pdfPage, annotDict);
 }
 
-function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, pdfW: number, pdfH: number, rot: number): void {
+function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, pdfW, pdfH, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, pdfW, pdfH, rot);
+  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
+  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
+  // As with Square: the ellipse border is inset into its /Rect, so pad it out.
+  const pad = ann.thickness / 2;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Circle'),
-    Rect:    [Math.min(x1,x2), Math.min(y1,y2), Math.max(x1,x2), Math.max(y1,y2)],
+    Rect:    [Math.min(x1,x2) - pad, Math.min(y1,y2) - pad, Math.max(x1,x2) + pad, Math.max(y1,y2) + pad],
     BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
     F:       PDFNumber.of(4),
@@ -288,9 +359,10 @@ export async function embedFooter(pdfBytes: Uint8Array, config: FooterConfig): P
   const yPos   = 20;
 
   for (let i = 0; i < total; i++) {
-    const page        = pdfDoc.getPage(i);
-    const { width: pdfW } = page.getSize();
-    const resolve     = (t: string) =>
+    const page    = pdfDoc.getPage(i);
+    const box     = visibleBox(page);
+    const baseY   = box.y + yPos;
+    const resolve = (t: string) =>
       t.replace(/\{page\}/g, String(i + 1)).replace(/\{total\}/g, String(total));
 
     const l = resolve(config.left);
@@ -298,15 +370,15 @@ export async function embedFooter(pdfBytes: Uint8Array, config: FooterConfig): P
     const r = resolve(config.right);
 
     if (l) {
-      page.drawText(l, { x: margin, y: yPos, size: config.fontSize, font, color: black });
+      page.drawText(l, { x: box.x + margin, y: baseY, size: config.fontSize, font, color: black });
     }
     if (c) {
       const tw = font.widthOfTextAtSize(c, config.fontSize);
-      page.drawText(c, { x: (pdfW - tw) / 2, y: yPos, size: config.fontSize, font, color: black });
+      page.drawText(c, { x: box.x + (box.width - tw) / 2, y: baseY, size: config.fontSize, font, color: black });
     }
     if (r) {
       const tw = font.widthOfTextAtSize(r, config.fontSize);
-      page.drawText(r, { x: pdfW - margin - tw, y: yPos, size: config.fontSize, font, color: black });
+      page.drawText(r, { x: box.x + box.width - margin - tw, y: baseY, size: config.fontSize, font, color: black });
     }
   }
 
@@ -335,7 +407,7 @@ export async function embedWatermark(pdfBytes: Uint8Array, config: WatermarkConf
 
   for (let i = 0; i < pdfDoc.getPageCount(); i++) {
     const page = pdfDoc.getPage(i);
-    const { width: pdfW, height: pdfH } = page.getSize();
+    const box  = visibleBox(page);
 
     lines.forEach((line, li) => {
       const textWidth  = font.widthOfTextAtSize(line, config.fontSize);
@@ -344,11 +416,11 @@ export async function embedWatermark(pdfBytes: Uint8Array, config: WatermarkConf
       const perpOffset = ((lines.length - 1) / 2 - li) * lineHeight;
 
       // Centre each line at page centre then offset perpendicularly
-      const x = pdfW / 2
+      const x = box.x + box.width / 2
         - (textWidth / 2)        * Math.cos(angleRad)
         + (config.fontSize / 2)  * Math.sin(angleRad)
         - perpOffset             * Math.sin(angleRad);
-      const y = pdfH / 2
+      const y = box.y + box.height / 2
         - (textWidth / 2)        * Math.sin(angleRad)
         - (config.fontSize / 2)  * Math.cos(angleRad)
         + perpOffset             * Math.cos(angleRad);

@@ -20,7 +20,10 @@ export default defineConfig([
     ignores: ["out/", "dist/", "node_modules/", "renderer/"],
   },
   {
-    // Type-aware rules — requires TypeScript project context
+    // Type-aware rules — requires TypeScript project context, so they are
+    // scoped to the TypeScript sources. The test suite is plain ESM that lives
+    // outside the TS projects and is linted without type information.
+    files: ["**/*.{ts,mts,cts}"],
     languageOptions: {
       parserOptions: {
         projectService: true,

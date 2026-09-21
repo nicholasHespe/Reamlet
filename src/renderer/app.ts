@@ -105,6 +105,23 @@ if (isMac) {
   });
 }
 
+// ── Theme (Light / Dark / System Default) ───────────────────────
+
+function _applyTheme(data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) {
+  document.documentElement.dataset.theme = data.effective;
+  document.querySelectorAll('button[data-theme-choice]').forEach(btn => {
+    btn.classList.toggle('active', (btn as HTMLElement).dataset.themeChoice === data.mode);
+  });
+}
+
+window.api.getTheme().then(_applyTheme);
+window.api.onThemeUpdated(_applyTheme);
+
+async function _setTheme(mode: 'light' | 'dark' | 'system') {
+  const result = await window.api.setTheme(mode);
+  if (result.ok) _applyTheme(await window.api.getTheme());
+}
+
 // ── Find bar ───────────────────────────────────────────────────
 
 const finder = new FindBar({
@@ -478,7 +495,12 @@ function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array): 
   const viewer   = new PDFViewer(pages);
   const pdfBytes = pdfData instanceof Uint8Array ? pdfData.slice() : new Uint8Array(pdfData);
 
-  const state = { id, filePath, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
+  const state: Tab = { id, filePath, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
+  // A deferred (off-screen) page render clears that page's annotation canvas as a
+  // side effect of resizing it — repaint from the live annotator so annotations
+  // don't disappear when a page scrolled off-screen during zoom/rotate comes back
+  // into view. state.annotator is looked up live since it's replaced on sleep/wake.
+  viewer.onPageRendered = (pageNum) => state.annotator?.redrawPage(pageNum);
   tabs.push(state);
   return state;
 }
@@ -832,7 +854,7 @@ function _sleepCheck() {
   sorted.forEach((tab, i) => {
     if (tab.sleeping || tab === activeTab || !tab.annotator) return;
     const tooOld = (now - (tab.lastActive || 0)) > SLEEP_AFTER_MS;
-    if (i >= SLEEP_KEEP_RECENT || tooOld) _sleepTab(tab);
+    if (i >= SLEEP_KEEP_RECENT && tooOld) _sleepTab(tab);
   });
 }
 
@@ -840,7 +862,14 @@ setInterval(_sleepCheck, 15_000);
 
 // ── Tab content loader (async; shows spinner until done) ────────
 
-async function _loadTabContent(tab: Tab) {
+// preserveView keeps the current zoom and scroll position instead of fitting to
+// width — used when reloading a document the user is already reading (e.g. after
+// a save), where snapping the view would be jarring.
+async function _loadTabContent(tab: Tab, preserveView = false) {
+  const scrollTop = preserveView ? tab.pane.scrollTop : 0;
+  // Reloading replaces the annotator; without this the old one keeps its
+  // document-level mouse/key listeners attached for the life of the window.
+  tab.annotator?.destroy();
   try {
     await tab.viewer.load(tab.pdfBytes);
     tab.annotator = new Annotator(tab.viewer.pages, tab.viewer);
@@ -868,8 +897,21 @@ async function _loadTabContent(tab: Tab) {
     _syncScrollbar();
     _positionScrollbarH();
     tab._notBeenViewed = false;
-    await fitWidth();
+    if (preserveView) requestAnimationFrame(() => { tab.pane.scrollTop = scrollTop; });
+    else await fitWidth();
   }
+}
+
+// A successful save bakes the annotations into the file, so the in-memory overlay
+// is now a duplicate of what the document itself contains. Reload from the saved
+// bytes and drop the overlay: the user sees exactly what was written, and a second
+// save can't embed the same annotations a second time.
+async function _reloadAfterSave(tab: Tab) {
+  finder.invalidateTab(tab);
+  await _loadTabContent(tab, true);
+  tab._undoCleanIdx = tab._undoIdx ?? null;
+  tab.dirty = false;
+  renderTabBar();
 }
 
 // ── Open / Save ────────────────────────────────────────────────
@@ -946,9 +988,7 @@ async function saveTab(tab: Tab | null) {
     if (res.ok) {
       tab.pdfBytes       = bytes;
       tab._savedBytes    = null;
-      tab._undoCleanIdx  = tab._undoIdx ?? null;
-      tab.dirty          = false;
-      renderTabBar();
+      await _reloadAfterSave(tab);
       return true;
     } else if (res.error && res.error !== 'cancelled') {
       alert('Save failed: ' + res.error);
@@ -967,9 +1007,7 @@ async function saveTab(tab: Tab | null) {
     tab._suggestedName = null;
     tab.pdfBytes       = bytes;
     tab._savedBytes    = null;
-    tab._undoCleanIdx  = tab._undoIdx ?? null;
-    tab.dirty          = false;
-    renderTabBar();
+    await _reloadAfterSave(tab);
     updateTitleBar(tab);
     return true;
   }
@@ -1000,9 +1038,7 @@ async function saveTabCopy(tab: Tab | null) {
     tab._suggestedDir  = null;
     tab._suggestedName = null;
     tab.pdfBytes       = bytes;
-    tab._undoCleanIdx  = tab._undoIdx ?? null;
-    tab.dirty          = false;
-    renderTabBar();
+    await _reloadAfterSave(tab);
     updateTitleBar(tab);
     return true;
   }
@@ -1653,6 +1689,9 @@ const _menuActions = {
   'fit-height':  () => fitHeight(),
   'devtools':    () => window.api.openDevTools(),
   'app-reload':  () => location.reload(),
+  'theme-light':  () => _setTheme('light'),
+  'theme-dark':   () => _setTheme('dark'),
+  'theme-system': () => _setTheme('system'),
 };
 
 function _closeAllDropdowns() {
@@ -1699,6 +1738,9 @@ window.api.onMenuEvent((event) => {
     case 'menu-close-tab':    if (activeTab) requestCloseTab(activeTab); break;
     case 'menu-reopen-tab':   reopenLastTab(); break;
     case 'menu-extension-id': _openExtensionIdModal(); break;
+    case 'menu-theme-light':  _setTheme('light'); break;
+    case 'menu-theme-dark':   _setTheme('dark'); break;
+    case 'menu-theme-system': _setTheme('system'); break;
   }
 });
 

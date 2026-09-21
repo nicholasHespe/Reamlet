@@ -1,6 +1,6 @@
 {
   "name": "reamlet",
-  "version": "0.2.5",
+  "version": "0.2.7",
   "description": "Lightweight standalone PDF viewer for Windows",
   "main": "out/main.js",
   "packageManager": "pnpm@10.32.1",
@@ -9,6 +9,7 @@
     "clean": "node -e \"['out','dist','native-host/dist'].forEach(d => require('fs').rmSync(d, { recursive: true, force: true }))\"",
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.renderer.json",
     "build-native-host": "node node_modules/pkg/lib-es5/bin.js native-host/host.js --target node18-win-x64 --output native-host/dist/reamlet-native-host.exe",
+    "test": "pnpm run build && node --test test/*.test.mjs",
     "start": "pnpm run build && electron out/main.js",
     "dist": "pnpm run build && electron-builder --win portable",
     "build-win": "pnpm run build && pnpm run build-native-host && electron-builder --win nsis portable --x64",
