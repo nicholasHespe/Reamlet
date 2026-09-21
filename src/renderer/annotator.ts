@@ -27,6 +27,8 @@ export class Annotator {
   tool: string;
   color: string;
   thickness: number;
+  /** Fill colour applied to newly placed rect/oval/text annotations; null for no fill. */
+  fillColor: string | null;
   textBold: boolean;
   textUnderline: boolean;
   textFontSize: number;
@@ -63,6 +65,7 @@ export class Annotator {
     this.tool        = 'select';
     this.color       = '#ff3333';
     this.thickness   = 3;
+    this.fillColor   = null;
     this.textBold      = false;
     this.textUnderline = false;
     this.textFontSize  = 14;
@@ -109,6 +112,7 @@ export class Annotator {
 
   setColor(color: string)       { this.color        = color; }
   setThickness(t: number)       { this.thickness    = t; }
+  setFillColor(color: string | null) { this.fillColor = color; }
   setTextBold(b: boolean)       { this.textBold     = b; }
   setTextUnderline(b: boolean)  { this.textUnderline = b; }
   setTextFontSize(size: number) { this.textFontSize = Math.max(8, Math.min(96, size)); }
@@ -427,6 +431,7 @@ export class Annotator {
             x2: x2 / w, y2: y2 / h,
             color:     this.color,
             thickness: this.thickness / scale,
+            fillColor: (this.tool === 'rect' || this.tool === 'oval') ? this.fillColor : null,
           });
           this._pushHistory();
         }
@@ -625,7 +630,7 @@ export class Annotator {
 
     const scale = this.viewer?.scale ?? 1;
     this._openTextarea(wrapper, cx * scaleX, cy * scaleY, '', {
-      fontSize: fontSize * scale, weight, decor, color: this.color,
+      fontSize: fontSize * scale, weight, decor, color: this.color, fillColor: this.fillColor,
       widthPx: TEXT_DEFAULT_WIDTH * scale * scaleX,
       onCommit: (text, widthPx) => {
         if (!text) return;
@@ -638,6 +643,7 @@ export class Annotator {
           fontSize,
           bold:      this.textBold,
           underline: this.textUnderline,
+          fillColor: this.fillColor,
         };
         this.annotations.push(annot);
         this._pushHistory();
@@ -666,7 +672,7 @@ export class Annotator {
 
     const scale = this.viewer?.scale ?? 1;
     this._openTextarea(wrapper, ann.x * w * scaleX, ann.y * h * scaleY, ann.text, {
-      fontSize: ann.fontSize * scale, weight, decor, color: ann.color,
+      fontSize: ann.fontSize * scale, weight, decor, color: ann.color, fillColor: ann.fillColor,
       widthPx: ann.width * w * scaleX,
       onCommit: (text, widthPx) => {
         const newAnn: TextAnnotation = { ...ann, text, width: widthPx / scaleX / w };
@@ -692,8 +698,8 @@ export class Annotator {
     left: number,
     top: number,
     initialText: string,
-    { fontSize, weight, decor, color, widthPx, onCommit, onCancel }: {
-      fontSize: number; weight: string; decor: string; color: string; widthPx: number;
+    { fontSize, weight, decor, color, fillColor, widthPx, onCommit, onCancel }: {
+      fontSize: number; weight: string; decor: string; color: string; fillColor: string | null; widthPx: number;
       onCommit?: (text: string, widthPx: number) => void;
       onCancel?: () => void;
     },
@@ -706,7 +712,7 @@ export class Annotator {
       top:             ${top - fontSize / 2}px;
       box-sizing:      content-box;
       width:           ${Math.max(widthPx, fontSize)}px;
-      background:      transparent;
+      background:      ${fillColor ?? 'transparent'};
       border:          ${TEXTAREA_BORDER}px dashed rgba(128,128,128,0.6);
       font:            ${weight} ${fontSize}px ${TEXT_FONT_STACK};
       color:           ${color};
@@ -923,17 +929,19 @@ export class Annotator {
   _drawPreview(canvas: HTMLCanvasElement, [x1, y1]: number[], [x2, y2]: number[]) {
     const ctx = canvas.getContext('2d')!;
     ctx.save();
+    const filled = (this.tool === 'rect' || this.tool === 'oval') && !!this.fillColor;
+    if (filled) ctx.fillStyle = this.fillColor!;
     ctx.strokeStyle = this.color;
     ctx.lineWidth   = this.thickness;
     ctx.lineCap     = 'round';
     ctx.lineJoin    = 'round';
     ctx.setLineDash([4, 4]);
-    this._drawShape(ctx, this.tool, x1, y1, x2, y2);
+    this._drawShape(ctx, this.tool, x1, y1, x2, y2, filled);
     ctx.setLineDash([]);
     ctx.restore();
   }
 
-  _drawShape(ctx: CanvasRenderingContext2D, type: string, x1: number, y1: number, x2: number, y2: number) {
+  _drawShape(ctx: CanvasRenderingContext2D, type: string, x1: number, y1: number, x2: number, y2: number, fill = false) {
     if (type === 'line') {
       ctx.beginPath();
       ctx.moveTo(x1, y1);
@@ -941,13 +949,16 @@ export class Annotator {
       ctx.stroke();
     } else if (type === 'rect') {
       ctx.beginPath();
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.rect(x1, y1, x2 - x1, y2 - y1);
+      if (fill) ctx.fill();
+      ctx.stroke();
     } else if (type === 'oval') {
       const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
       const rx = Math.max(Math.abs(x2 - x1) / 2, 1);
       const ry = Math.max(Math.abs(y2 - y1) / 2, 1);
       ctx.beginPath();
       ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      if (fill) ctx.fill();
       ctx.stroke();
     } else if (type === 'arrow') {
       const headLen = Math.max(10, ctx.lineWidth * 4);
@@ -1035,6 +1046,11 @@ export class Annotator {
     } else if (annot.type === 'text') {
       const fs     = annot.fontSize * scale;
       const weight = annot.bold ? 'bold ' : '';
+      if (annot.fillColor) {
+        const b = this._textBounds(annot, w, h);
+        ctx.fillStyle = annot.fillColor;
+        ctx.fillRect(b.x * w, b.y * h, b.w * w, b.h * h);
+      }
       ctx.fillStyle = annot.color;
       ctx.font      = `${weight}${fs}px ${TEXT_FONT_STACK}`;
       this._textLines(annot, w).forEach((line: string, i: number) => {
@@ -1052,11 +1068,13 @@ export class Annotator {
       });
 
     } else if (annot.type === 'line' || annot.type === 'rect' || annot.type === 'oval' || annot.type === 'arrow') {
+      const filled = (annot.type === 'rect' || annot.type === 'oval') && !!annot.fillColor;
+      if (filled) ctx.fillStyle = annot.fillColor!;
       ctx.strokeStyle = annot.color;
       ctx.lineWidth   = annot.thickness * scale;
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';
-      this._drawShape(ctx, annot.type, annot.x1 * w, annot.y1 * h, annot.x2 * w, annot.y2 * h);
+      this._drawShape(ctx, annot.type, annot.x1 * w, annot.y1 * h, annot.x2 * w, annot.y2 * h, filled);
     }
     ctx.restore();
   }

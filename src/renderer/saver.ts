@@ -9,7 +9,7 @@ import type { Annotation, DrawAnnotation, HighlightAnnotation, TextAnnotation, S
 import type { PDFViewer } from './viewer.js';
 import { toPdfCoords, displaySize, type PageBox } from './page-box.js';
 import {
-  TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness, wrapText,
+  TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness, textBlockHeight, wrapText,
 } from './text-layout.js';
 
 // Cast the direct-path runtime import to the pdf-lib type surface
@@ -216,6 +216,19 @@ function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox
   const lines = wrapText(ann.text, ann.width * display.width,
                          (s) => font.widthOfTextAtSize(s, size));
 
+  if (ann.fillColor) {
+    const { r: fr, g: fg, b: fb } = hexToRgb01(ann.fillColor);
+    const blockHeight = textBlockHeight(lines.length, size);
+    const [fx, fy] = toPdfCoords(ann.x, ann.y + blockHeight / display.height, box, rot);
+    pdfPage.drawRectangle({
+      x: fx, y: fy,
+      width:  ann.width * display.width,
+      height: blockHeight,
+      color:  rgb(fr, fg, fb),
+      rotate: degrees(rot),
+    });
+  }
+
   lines.forEach((line, i) => {
     if (!line) return;
     const baselineFromTop = textBaselineOffset(size, i);
@@ -302,12 +315,14 @@ function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageB
   // A Square's border is drawn inside its /Rect, whereas the canvas centres the
   // stroke on the path — grow the rect by half the stroke so both line up.
   const pad = ann.thickness / 2;
+  const fill = ann.fillColor ? hexToRgb01(ann.fillColor) : null;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Square'),
     Rect:    [Math.min(x1,x2) - pad, Math.min(y1,y2) - pad, Math.max(x1,x2) + pad, Math.max(y1,y2) + pad],
     BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
+    ...(fill ? { IC: [fill.r, fill.g, fill.b] } : {}),
     F:       PDFNumber.of(4),
   });
   _appendAnnotation(pdfPage, annotDict);
@@ -319,12 +334,14 @@ function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageB
   const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
   // As with Square: the ellipse border is inset into its /Rect, so pad it out.
   const pad = ann.thickness / 2;
+  const fill = ann.fillColor ? hexToRgb01(ann.fillColor) : null;
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Circle'),
     Rect:    [Math.min(x1,x2) - pad, Math.min(y1,y2) - pad, Math.max(x1,x2) + pad, Math.max(y1,y2) + pad],
     BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
+    ...(fill ? { IC: [fill.r, fill.g, fill.b] } : {}),
     F:       PDFNumber.of(4),
   });
   _appendAnnotation(pdfPage, annotDict);

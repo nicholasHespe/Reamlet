@@ -183,11 +183,11 @@
       <span class="sep"></span>
 
       <!-- Colour picker: single dot button → opens swatch panel -->
-      <div id="color-picker-wrap">
-        <button id="color-btn" title="Colour">
-          <span id="color-dot"></span>
+      <div id="color-picker-wrap" class="picker-wrap">
+        <button id="color-btn" class="picker-btn" title="Colour">
+          <span id="color-dot" class="picker-dot"></span>
         </button>
-        <div id="color-panel" class="hidden">
+        <div id="color-panel" class="swatch-panel hidden">
           <!-- Row 1: Reds / warm -->
           <button class="swatch" data-color="#ff3333" style="background:#ff3333" title="Red"></button>
           <button class="swatch" data-color="#ff6644" style="background:#ff6644" title="Coral"></button>
@@ -207,6 +207,36 @@
           <button class="swatch" data-color="#cc44ff" style="background:#cc44ff" title="Purple"></button>
           <button class="swatch" data-color="#ff44aa" style="background:#ff44aa" title="Pink"></button>
           <!-- Row 4: Neutrals -->
+          <button class="swatch" data-color="#884400" style="background:#884400" title="Brown"></button>
+          <button class="swatch" data-color="#111111" style="background:#111111" title="Black"></button>
+          <button class="swatch" data-color="#555555" style="background:#555555" title="Dark Gray"></button>
+          <button class="swatch" data-color="#aaaaaa" style="background:#aaaaaa" title="Gray"></button>
+          <button class="swatch" data-color="#ffffff" style="background:#ffffff" title="White"></button>
+        </div>
+      </div>
+
+      <!-- Fill colour picker: same swatches, plus "None" — for rect/oval/text -->
+      <div id="fill-picker-wrap" class="picker-wrap">
+        <button id="fill-btn" class="picker-btn" title="Fill colour">
+          <span id="fill-dot" class="picker-dot fill-none"></span>
+        </button>
+        <div id="fill-panel" class="swatch-panel hidden">
+          <button class="swatch fill-none active" data-color="none" title="No fill"></button>
+          <button class="swatch" data-color="#ff3333" style="background:#ff3333" title="Red"></button>
+          <button class="swatch" data-color="#ff6644" style="background:#ff6644" title="Coral"></button>
+          <button class="swatch" data-color="#ff8c00" style="background:#ff8c00" title="Orange"></button>
+          <button class="swatch" data-color="#ffb300" style="background:#ffb300" title="Amber"></button>
+          <button class="swatch" data-color="#f5c518" style="background:#f5c518" title="Yellow"></button>
+          <button class="swatch" data-color="#aacc00" style="background:#aacc00" title="Lime"></button>
+          <button class="swatch" data-color="#33bb55" style="background:#33bb55" title="Green"></button>
+          <button class="swatch" data-color="#00cc88" style="background:#00cc88" title="Teal"></button>
+          <button class="swatch" data-color="#00bbbb" style="background:#00bbbb" title="Cyan"></button>
+          <button class="swatch" data-color="#0099cc" style="background:#0099cc" title="Sky"></button>
+          <button class="swatch" data-color="#3388ff" style="background:#3388ff" title="Blue"></button>
+          <button class="swatch" data-color="#0055cc" style="background:#0055cc" title="Dark Blue"></button>
+          <button class="swatch" data-color="#6644cc" style="background:#6644cc" title="Indigo"></button>
+          <button class="swatch" data-color="#cc44ff" style="background:#cc44ff" title="Purple"></button>
+          <button class="swatch" data-color="#ff44aa" style="background:#ff44aa" title="Pink"></button>
           <button class="swatch" data-color="#884400" style="background:#884400" title="Brown"></button>
           <button class="swatch" data-color="#111111" style="background:#111111" title="Black"></button>
           <button class="swatch" data-color="#555555" style="background:#555555" title="Dark Gray"></button>
