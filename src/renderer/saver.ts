@@ -11,17 +11,23 @@ import type { Annotation, DrawAnnotation, HighlightAnnotation, TextAnnotation, S
 import type { PDFViewer } from './viewer.js';
 import type { FontFiles } from './fonts.js';
 import { toPdfCoords, displaySize, type PageBox } from './page-box.js';
+import { arrowGeometry, arrowHeadLength } from './arrow-geometry.js';
 import {
   TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness, textBlockHeight, wrapText,
 } from './text-layout.js';
 
 // Cast the direct-path runtime import to the pdf-lib type surface
-const { PDFDocument, PDFName, PDFArray, PDFNumber, degrees, rgb } =
-  _pdfLib as unknown as typeof PDFLibNS;
+const {
+  PDFDocument, PDFName, PDFArray, PDFNumber, degrees, rgb,
+  pushGraphicsState, popGraphicsState, setStrokingRgbColor, setFillingRgbColor,
+  setLineWidth, setLineCap, LineCapStyle, moveTo, lineTo, closePath, stroke, fill,
+} = _pdfLib as unknown as typeof PDFLibNS;
 
 type PDFDoc  = import('pdf-lib').PDFDocument;
 type PDFPage = import('pdf-lib').PDFPage;
 type PDFFont = import('pdf-lib').PDFFont;
+type PDFOperator = import('pdf-lib').PDFOperator;
+type PDFRef = import('pdf-lib').PDFRef;
 type Fontkit = Parameters<PDFDoc['registerFontkit']>[0];
 
 // The ES build of fontkit imports 'pako' by bare name, which Electron's file://
@@ -290,19 +296,51 @@ function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox
   _appendAnnotation(pdfPage, annotDict);
 }
 
+/**
+ * An arrow is a Line annotation ending in a closed arrowhead. It carries its own
+ * appearance stream drawing the shaft and filled head exactly as the canvas
+ * does (see arrow-geometry.ts), because viewers that build a Line's appearance
+ * from /L alone, PDF.js among them, leave the line ending off. /LE and /IC
+ * still describe the same arrow for viewers that regenerate it.
+ */
 function _addArrowAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
   const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
-  const pad = ann.thickness * 5;
+  const start = toPdfCoords(ann.x1, ann.y1, box, rot);
+  const tip   = toPdfCoords(ann.x2, ann.y2, box, rot);
+  const { shaftEnd, head } = arrowGeometry(start, tip, arrowHeadLength(ann.thickness));
+
+  const xs  = [start, shaftEnd, ...head].map(([x]) => x);
+  const ys  = [start, shaftEnd, ...head].map(([, y]) => y);
+  const pad = ann.thickness;
+  const rect = [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad];
+
+  const appearance = _appearance(pdfPage, rect, [
+    pushGraphicsState(),
+    setStrokingRgbColor(r, g, b),
+    setFillingRgbColor(r, g, b),
+    setLineWidth(ann.thickness),
+    setLineCap(LineCapStyle.Round),
+    moveTo(...start),
+    lineTo(...shaftEnd),
+    stroke(),
+    moveTo(...head[0]),
+    lineTo(...head[1]),
+    lineTo(...head[2]),
+    closePath(),
+    fill(),
+    popGraphicsState(),
+  ]);
+
   const annotDict = pdfPage.doc.context.obj({
     Type:    PDFName.of('Annot'),
     Subtype: PDFName.of('Line'),
-    Rect:    [Math.min(x1,x2)-pad, Math.min(y1,y2)-pad, Math.max(x1,x2)+pad, Math.max(y1,y2)+pad],
-    L:       [x1, y1, x2, y2],
-    LE:      [PDFName.of('None'), PDFName.of('OpenArrow')],
+    Rect:    rect,
+    L:       [...start, ...tip],
+    LE:      [PDFName.of('None'), PDFName.of('ClosedArrow')],
     BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
     C:       [r, g, b],
+    IC:      [r, g, b],
+    AP:      pdfPage.doc.context.obj({ N: appearance }),
     F:       PDFNumber.of(4),
   });
   _appendAnnotation(pdfPage, annotDict);
@@ -345,6 +383,16 @@ function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageB
     F:       PDFNumber.of(4),
   });
   _appendAnnotation(pdfPage, annotDict);
+}
+
+/**
+ * Register a form XObject drawing `ops` for use as an annotation's normal
+ * appearance. Its BBox is the annotation's /Rect and its matrix the identity,
+ * so the operators draw straight in page space.
+ */
+function _appearance(pdfPage: PDFPage, rect: number[], ops: PDFOperator[]): PDFRef {
+  const context = pdfPage.doc.context;
+  return context.register(context.formXObject(ops, { BBox: rect, Resources: {} }));
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
