@@ -4,7 +4,9 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PDFDocument, PDFName } from 'pdf-lib';
+import {
+  PDFDocument, PDFName, PDFDict, pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
+} from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
 
@@ -112,6 +114,50 @@ export async function readAnnotations(bytes, pageIdx = 0) {
     });
   }
   return out;
+}
+
+/**
+ * A copy of the document with every annotation's normal appearance stamped into
+ * its page where a viewer paints it, and the annotations removed. Placement
+ * follows PDF 32000 §12.5.5: the appearance's BBox, transformed by its Matrix,
+ * is mapped onto the annotation's /Rect.
+ */
+export async function flattenAppearances(bytes) {
+  const doc = await PDFDocument.load(bytes);
+  for (const page of doc.getPages()) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    for (let i = 0; i < annots.size(); i++) {
+      const dict   = annots.lookup(i, PDFDict);
+      const apRef  = dict.lookupMaybe(PDFName.of('AP'), PDFDict)?.get(PDFName.of('N'));
+      if (!apRef) continue;
+      const stream = doc.context.lookup(apRef);
+      const [bx0, by0, bx1, by1] = nums(stream.dict.lookup(PDFName.of('BBox')));
+      const m = stream.dict.has(PDFName.of('Matrix')) ? nums(stream.dict.lookup(PDFName.of('Matrix'))) : [1, 0, 0, 1, 0, 0];
+      const corners = [[bx0, by0], [bx1, by0], [bx0, by1], [bx1, by1]]
+        .map(([x, y]) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]);
+      const tx0 = Math.min(...corners.map(c => c[0])), tx1 = Math.max(...corners.map(c => c[0]));
+      const ty0 = Math.min(...corners.map(c => c[1])), ty1 = Math.max(...corners.map(c => c[1]));
+      const [rx0, ry0, rx1, ry1] = nums(dict.lookup(PDFName.of('Rect')));
+      const [x0, x1] = [Math.min(rx0, rx1), Math.max(rx0, rx1)];
+      const [y0, y1] = [Math.min(ry0, ry1), Math.max(ry0, ry1)];
+      const sx = (x1 - x0) / (tx1 - tx0), sy = (y1 - y0) / (ty1 - ty0);
+      const name = page.node.newXObject('Ap', apRef);
+      page.pushOperators(
+        pushGraphicsState(),
+        concatTransformationMatrix(sx, 0, 0, sy, x0 - tx0 * sx, y0 - ty0 * sy),
+        drawObject(name),
+        popGraphicsState(),
+      );
+    }
+    page.node.delete(PDFName.of('Annots'));
+  }
+  return doc.save();
+}
+
+/** Text a viewer paints on the page, from page content and annotation appearances alike. */
+export async function readPaintedText(bytes, pageNum = 1) {
+  return readDrawnText(await flattenAppearances(bytes), pageNum);
 }
 
 /** Text drawn into the page content stream, with each run's baseline origin. */

@@ -9,6 +9,7 @@ import {
   textBlockHeight, wrapText, type MeasureText,
 } from './text-layout.js';
 import { arrowGeometry, arrowHeadLength } from './arrow-geometry.js';
+import { HIGHLIGHT_OPACITY } from './annotation-style.js';
 
 /** Width of a newly placed text box, in PDF points. */
 const TEXT_DEFAULT_WIDTH = 160;
@@ -543,7 +544,7 @@ export class Annotator {
       const ctx = cvs.getContext('2d')!;
       const w = cvs.width, h = cvs.height;
       ctx.save();
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.strokeStyle = this.color;
       ctx.lineWidth   = 20;
       ctx.lineCap     = 'round';
@@ -1029,7 +1030,7 @@ export class Annotator {
       ctx.stroke();
 
     } else if (annot.type === 'freeHighlight') {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.strokeStyle = annot.color;
       ctx.lineWidth   = annot.thickness * scale;
       ctx.lineCap     = 'round';
@@ -1042,7 +1043,7 @@ export class Annotator {
       ctx.stroke();
 
     } else if (annot.type === 'highlight') {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.fillStyle   = annot.color;
       annot.rects.forEach(r => {
         ctx.fillRect(r.x * w, r.y * h, r.width * w, r.height * h);
