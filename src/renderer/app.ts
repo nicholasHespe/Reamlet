@@ -340,11 +340,8 @@ viewerHost.addEventListener('contextmenu', (e) => {
 
   // Show Cut only when a cuttable annotation is selected; Paste when clipboard has content
   const ann = activeTab.annotator;
-  const selectedAnn = ann && ann._selectedIdx !== null ? ann.annotations[ann._selectedIdx] : null;
-  const canCut = selectedAnn !== null && selectedAnn !== undefined &&
-    Annotator._cuttableTypes.includes(selectedAnn.type);
-  ctxCut.style.display   = canCut ? '' : 'none';
-  ctxPaste.style.display = (ann && ann._clipboard) ? '' : 'none';
+  ctxCut.style.display   = ann?.canCopy()      ? '' : 'none';
+  ctxPaste.style.display = ann?.hasClipboard() ? '' : 'none';
 
   contextMenu.classList.remove('hidden');
   const menuW = contextMenu.offsetWidth  || 140;
@@ -816,12 +813,9 @@ function switchTab(tab: Tab) {
   }
 
   if (tab.annotator) {
-    thicknessInput.value = String(tab.annotator.thickness);
     syncToolButtons(tab.annotator.tool);
+    _syncStyleControls(tab.annotator);
   }
-
-  syncSwatches(tab.annotator?.color);
-  syncFillSwatches(tab.annotator?.fillColor);
   renderToc(tab.outline);
   updatePageDisplay(tab);
   attachScrollListener(tab);
@@ -935,10 +929,8 @@ async function _wakeTab(tab: Tab) {
 
   renderTabBar();
   if (activeTab === tab) {
-    thicknessInput.value = String(tab.annotator!.thickness);
     syncToolButtons(tab.annotator!.tool);
-    syncSwatches(tab.annotator!.color);
-    syncFillSwatches(tab.annotator!.fillColor);
+    _syncStyleControls(tab.annotator!);
     renderToc(tab.outline);
     updatePageDisplay(tab);
     attachScrollListener(tab);
@@ -988,8 +980,7 @@ async function _loadTabContent(tab: Tab, preserveView = false) {
   renderTabBar();
   if (activeTab === tab) {
     syncToolButtons(tab.annotator!.tool);
-    syncSwatches(tab.annotator!.color);
-    syncFillSwatches(tab.annotator!.fillColor);
+    _syncStyleControls(tab.annotator!);
     renderToc(tab.outline);
     updatePageDisplay(tab);
     _syncScrollbar();
@@ -1278,8 +1269,9 @@ async function reopenLastTab() {
 // Give a tab a fresh annotator, wired to the text bar and to dirty tracking.
 function _createAnnotator(tab: Tab) {
   tab.annotator = new Annotator(tab.viewer.pages, tab.viewer);
-  tab.annotator.onTextEditStart = (session) => textBar.show(session);
-  tab.annotator.onTextEditEnd   = () => textBar.hide();
+  tab.annotator.onTextBarShow     = (target) => textBar.show(target);
+  tab.annotator.onTextBarHide     = () => textBar.hide();
+  tab.annotator.onSelectionChange = () => { if (tab === activeTab) _syncStyleControls(tab.annotator!); };
   _patchAnnotatorForDirty(tab);
 }
 
@@ -1298,7 +1290,9 @@ function _patchAnnotatorForDirty(tab: Tab) {
     },
   });
   tab.annotator!.annotations = proxy;
-  tab.annotator!.onCommit = () => _pushUndo(tab);
+  // Restyling or moving an annotation changes it in place, which the proxy
+  // can't see; every committed edit is a change, so it marks the tab too.
+  tab.annotator!.onCommit = () => { _pushUndo(tab); markDirty(tab); };
 }
 
 // ── Unified undo / redo ────────────────────────────────────────
@@ -1702,6 +1696,22 @@ function syncFillSwatches(fillColor: string | null | undefined) {
   if (fillColor) fillDot.style.background = fillColor;
 }
 
+// The colour, fill and thickness controls show the selected annotations'
+// values while something is selected, and the tool's settings otherwise.
+function _syncStyleControls(annotator: Annotator) {
+  const selected  = annotator.selectedAnnotations();
+  const scale     = annotator.viewer?.scale ?? 1;
+  const withFill  = selected.find(a => a.type === 'rect' || a.type === 'oval' || a.type === 'text') as
+    { fillColor: string | null } | undefined;
+  const withWidth = selected.find(a => a.type === 'draw' || a.type === 'line' || a.type === 'arrow' ||
+                                       a.type === 'rect' || a.type === 'oval') as { thickness: number } | undefined;
+  syncSwatches(selected[0]?.color ?? annotator.color);
+  syncFillSwatches(withFill ? withFill.fillColor : annotator.fillColor);
+  thicknessInput.value = String(withWidth
+    ? Math.max(1, Math.min(20, Math.round(withWidth.thickness * scale)))
+    : annotator.thickness);
+}
+
 // ── Hide annotations ───────────────────────────────────────────
 
 // A viewing aid for the whole window: hides the unsaved overlay and the
@@ -1727,11 +1737,15 @@ document.querySelectorAll('.tool-btn').forEach(btn => {
   });
 });
 
+// With annotations selected, the colour, fill and thickness controls restyle
+// them; otherwise they set what the next annotation is drawn with.
 colorPanel.addEventListener('click', (e) => {
   const swatch = (e.target as Element).closest<HTMLElement>('.swatch');
   if (!swatch) return;
   const color = swatch.dataset.color!;
-  activeTab?.annotator?.setColor(color);
+  const ann = activeTab?.annotator;
+  if (ann?.hasSelection()) ann.updateSelected({ color });
+  else                     ann?.setColor(color);
   syncSwatches(color);
   colorPanel.classList.add('hidden');
 });
@@ -1740,7 +1754,9 @@ fillPanel.addEventListener('click', (e) => {
   const swatch = (e.target as Element).closest<HTMLElement>('.swatch');
   if (!swatch) return;
   const color = swatch.dataset.color === NO_FILL ? null : swatch.dataset.color!;
-  activeTab?.annotator?.setFillColor(color);
+  const ann = activeTab?.annotator;
+  if (ann?.hasSelection()) ann.updateSelected({ fillColor: color });
+  else                     ann?.setFillColor(color);
   syncFillSwatches(color);
   fillPanel.classList.add('hidden');
 });
@@ -1774,8 +1790,19 @@ document.getElementById('btn-save')!.addEventListener('click',     () => saveTab
 document.getElementById('btn-save-as')!.addEventListener('click',  () => saveTabCopy(activeTab));
 btnHideAnnots.addEventListener('click', () => void _setAnnotationsHidden(!_annotationsHidden));
 
+// The slider is in screen pixels at the current zoom, as when drawing; a
+// selection's thickness is stored in points. Dragging it restyles live and
+// records a single undo step on release.
 thicknessInput.addEventListener('input', () => {
-  if (activeTab?.annotator) activeTab.annotator.setThickness(Number(thicknessInput.value));
+  const ann = activeTab?.annotator;
+  if (!ann) return;
+  const px = Number(thicknessInput.value);
+  if (ann.hasSelection()) ann.updateSelected({ thickness: px / (ann.viewer?.scale ?? 1) }, false);
+  else                    ann.setThickness(px);
+});
+thicknessInput.addEventListener('change', () => {
+  const ann = activeTab?.annotator;
+  if (ann?.hasSelection()) ann.commitSelectedEdit();
 });
 
 document.getElementById('btn-prev-page')!.addEventListener('click', () => {
@@ -1835,9 +1862,7 @@ document.addEventListener('keydown', async (e) => {
   if (ctrl && e.key === 'v') { e.preventDefault(); activeTab?.annotator?.paste(); return; }
   if (ctrl && e.key === 'c') {
     const ann = activeTab?.annotator;
-    if (ann && ann._selectedIdx !== null && Annotator._cuttableTypes.includes(ann.annotations[ann._selectedIdx]?.type)) {
-      e.preventDefault(); ann.copy(); return;
-    }
+    if (ann?.canCopy()) { e.preventDefault(); ann.copy(); return; }
   }
   if (ctrl && e.key === 'p') { e.preventDefault(); printTab(activeTab); return; }
   if (ctrl && e.key === 'r') { e.preventDefault(); if (activeTab) _applyZoomNow(activeTab.viewer.scale); return; }
