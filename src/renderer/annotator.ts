@@ -715,6 +715,7 @@ export class Annotator {
       background:      ${fillColor ?? 'transparent'};
       border:          ${TEXTAREA_BORDER}px dashed rgba(128,128,128,0.6);
       font:            ${weight} ${fontSize}px ${TEXT_FONT_STACK};
+      font-kerning:    none;
       color:           ${color};
       text-decoration: ${decor};
       line-height:     ${fontSize + TEXT_LINE_GAP}px;
@@ -785,6 +786,7 @@ export class Annotator {
     this._measureCanvas ??= document.createElement('canvas');
     const ctx = this._measureCanvas.getContext('2d')!;
     ctx.font = `${bold ? 'bold ' : ''}${fontPx}px ${TEXT_FONT_STACK}`;
+    ctx.fontKerning = 'none';
     return (text: string) => ctx.measureText(text).width;
   }
 
@@ -1051,8 +1053,9 @@ export class Annotator {
         ctx.fillStyle = annot.fillColor;
         ctx.fillRect(b.x * w, b.y * h, b.w * w, b.h * h);
       }
-      ctx.fillStyle = annot.color;
-      ctx.font      = `${weight}${fs}px ${TEXT_FONT_STACK}`;
+      ctx.fillStyle   = annot.color;
+      ctx.font        = `${weight}${fs}px ${TEXT_FONT_STACK}`;
+      ctx.fontKerning = 'none';
       this._textLines(annot, w).forEach((line: string, i: number) => {
         const x = annot.x * w;
         // Offsets are in points and scaled here, so a line keeps the same

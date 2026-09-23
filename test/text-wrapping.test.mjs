@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { wrapText, textBlockHeight, TEXT_LINE_GAP } from '../out/renderer/text-layout.js';
 import { embedAnnotations } from '../out/renderer/saver.js';
-import { makePdf, fakeViewer, readDrawnText } from './helpers/pdf-fixtures.mjs';
+import { makePdf, fakeViewer, readDrawnText, FONT_FILES } from './helpers/pdf-fixtures.mjs';
 
 // A monospace stand-in: every character is 10 wide, so line widths are countable.
 const mono = (s) => s.length * 10;
@@ -76,7 +76,7 @@ async function saveText(overrides) {
     color: '#000000', fontSize: 14, bold: false, underline: false,
     ...overrides,
   };
-  return { out: await embedAnnotations(src, [ann], viewer), ann };
+  return { out: await embedAnnotations(src, [ann], viewer, FONT_FILES), ann };
 }
 
 test('a long single-line annotation is wrapped in the saved file', async () => {
@@ -127,7 +127,7 @@ test('a rotated page wraps against the width that is on screen', async () => {
     type: 'text', pageNum: 1, x: 0.1, y: 0.1, width: 0.3, text: LONG,
     color: '#000000', fontSize: 14, bold: false, underline: false,
   };
-  const out   = await embedAnnotations(src, [ann], await fakeViewer(src));
+  const out   = await embedAnnotations(src, [ann], await fakeViewer(src), FONT_FILES);
   const drawn = await readDrawnText(out);
 
   assert.equal(drawn.map(d => d.str).join(' '), LONG);

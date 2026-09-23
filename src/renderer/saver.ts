@@ -4,30 +4,49 @@
 
 // @ts-expect-error — pdf-lib is imported via direct path for Electron's file:// ESM loader
 import * as _pdfLib from '../../node_modules/pdf-lib/dist/pdf-lib.esm.js';
+// @ts-expect-error — fontkit's UMD build, imported by path for the same reason; see `fontkit` below
+import * as _fontkitModule from '../../node_modules/@pdf-lib/fontkit/dist/fontkit.umd.min.js';
 import type * as PDFLibNS from 'pdf-lib';
 import type { Annotation, DrawAnnotation, HighlightAnnotation, TextAnnotation, ShapeAnnotation } from './types.js';
 import type { PDFViewer } from './viewer.js';
+import type { FontFiles } from './fonts.js';
 import { toPdfCoords, displaySize, type PageBox } from './page-box.js';
 import {
   TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness, textBlockHeight, wrapText,
 } from './text-layout.js';
 
 // Cast the direct-path runtime import to the pdf-lib type surface
-const { PDFDocument, PDFName, PDFArray, PDFNumber, degrees, rgb, StandardFonts } =
+const { PDFDocument, PDFName, PDFArray, PDFNumber, degrees, rgb } =
   _pdfLib as unknown as typeof PDFLibNS;
 
 type PDFDoc  = import('pdf-lib').PDFDocument;
 type PDFPage = import('pdf-lib').PDFPage;
 type PDFFont = import('pdf-lib').PDFFont;
+type Fontkit = Parameters<PDFDoc['registerFontkit']>[0];
 
-/** Helvetica + Helvetica-Bold, embedded once per document and shared by every text annotation. */
-interface TextFonts { regular: PDFFont; bold: PDFFont }
+// The ES build of fontkit imports 'pako' by bare name, which Electron's file://
+// loader cannot resolve, so the self-contained UMD build is used instead. Under
+// Node it loads as CommonJS and arrives as the default export; as a browser
+// module it exports nothing and registers `globalThis.fontkit` instead.
+const fontkit: Fontkit =
+  (_fontkitModule as { default?: Fontkit }).default ?? (globalThis as { fontkit?: Fontkit }).fontkit!;
+
+/** The faces a document's text annotations use, each embedded once and shared; null if unused. */
+interface TextFonts { regular: PDFFont | null; bold: PDFFont | null }
+
+/** Embed one face as a subset, so the saved file carries only the glyphs drawn with it. */
+function embedFace(pdfDoc: PDFDoc, bytes: Uint8Array): Promise<PDFFont> {
+  pdfDoc.registerFontkit(fontkit);
+  return pdfDoc.embedFont(bytes, { subset: true });
+}
 
 /**
  * Embed annotations into a PDF and return the modified bytes.
  * Also writes any user-applied page rotations into the PDF's /Rotate entry.
  */
-export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annotation[], viewer: PDFViewer): Promise<Uint8Array> {
+export async function embedAnnotations(
+  pdfBytes: Uint8Array, annotations: Annotation[], viewer: PDFViewer, fontFiles: FontFiles,
+): Promise<Uint8Array> {
   const pdfDoc: PDFDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
 
   // Write any form field values the user has edited
@@ -54,15 +73,13 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
   }
 
   // Text is drawn into the page content stream (not left to a viewer-generated
-  // annotation appearance), so the fonts must be embedded up front. Only do it
-  // when there is text to draw, to avoid touching documents that have none.
-  let textFonts: TextFonts | null = null;
-  if (annotations.some(a => a.type === 'text')) {
-    textFonts = {
-      regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
-      bold:    await pdfDoc.embedFont(StandardFonts.HelveticaBold),
-    };
-  }
+  // annotation appearance), so the fonts must be embedded up front — only the
+  // faces some text actually uses, so documents without text are left alone.
+  const textAnns = annotations.filter((a): a is TextAnnotation => a.type === 'text');
+  const textFonts: TextFonts = {
+    regular: textAnns.some(a => !a.bold) ? await embedFace(pdfDoc, fontFiles.regular) : null,
+    bold:    textAnns.some(a =>  a.bold) ? await embedFace(pdfDoc, fontFiles.bold)    : null,
+  };
 
   for (let pageIdx = 0; pageIdx < pdfDoc.getPageCount(); pageIdx++) {
     const pageNum = pageIdx + 1;
@@ -85,7 +102,7 @@ export async function embedAnnotations(pdfBytes: Uint8Array, annotations: Annota
       if      (ann.type === 'draw')          _addInkAnnotation      (pdfPage, ann,           box, totalRot);
       else if (ann.type === 'freeHighlight') _addInkAnnotation      (pdfPage, ann,           box, totalRot);
       else if (ann.type === 'highlight')     _addHighlightAnnotation(pdfPage, ann,           box, totalRot);
-      else if (ann.type === 'text')          _drawTextAnnotation    (pdfPage, ann,           box, totalRot, textFonts!);
+      else if (ann.type === 'text')          _drawTextAnnotation    (pdfPage, ann,           box, totalRot, textFonts);
       else if (ann.type === 'line')          _addLineAnnotation     (pdfPage, ann,           box, totalRot);
       else if (ann.type === 'arrow')         _addArrowAnnotation    (pdfPage, ann,           box, totalRot);
       else if (ann.type === 'rect')          _addSquareAnnotation   (pdfPage, ann,           box, totalRot);
@@ -207,7 +224,7 @@ function _addHighlightAnnotation(pdfPage: PDFPage, ann: HighlightAnnotation, box
 function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox, rot: number, fonts: TextFonts): void {
   const { r, g, b } = hexToRgb01(ann.color);
   const color = rgb(r, g, b);
-  const font  = ann.bold ? fonts.bold : fonts.regular;
+  const font  = (ann.bold ? fonts.bold : fonts.regular)!;
   const size  = ann.fontSize;
 
   const display = displaySize(box, rot);
@@ -236,7 +253,7 @@ function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox
 
     // A page displayed with /Rotate R turns its content R° clockwise, so the
     // text has to be turned R° counter-clockwise to come out upright.
-    _drawTextSafely(pdfPage, line, { x, y, size, font, color, rotate: degrees(rot) });
+    pdfPage.drawText(line, { x, y, size, font, color, rotate: degrees(rot) });
 
     if (ann.underline) {
       const thickness = textUnderlineThickness(size);
@@ -254,23 +271,6 @@ function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox
       });
     }
   });
-}
-
-/**
- * Helvetica can only encode WinAnsi characters. Rather than fail the whole save
- * on one stray glyph, fall back to a sanitised line so the rest of the text —
- * and every other annotation in the document — still gets written.
- */
-function _drawTextSafely(pdfPage: PDFPage, line: string, options: Parameters<PDFPage['drawText']>[1]): void {
-  try {
-    pdfPage.drawText(line, options);
-  } catch {
-    const font = options!.font!;
-    const safe = [...line]
-      .map(ch => { try { font.encodeText(ch); return ch; } catch { return '?'; } })
-      .join('');
-    try { pdfPage.drawText(safe, options); } catch { /* give up on this line */ }
-  }
 }
 
 function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
@@ -373,9 +373,9 @@ export interface FooterConfig {
  * Draw a 3-column footer on every page and return the modified bytes.
  * Tokens {page} and {total} are replaced with the current page number and total.
  */
-export async function embedFooter(pdfBytes: Uint8Array, config: FooterConfig): Promise<Uint8Array> {
+export async function embedFooter(pdfBytes: Uint8Array, config: FooterConfig, fontFiles: FontFiles): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-  const font   = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const font   = await embedFace(pdfDoc, fontFiles.regular);
   const total  = pdfDoc.getPageCount();
   const black  = rgb(0, 0, 0);
   const margin = 40;
@@ -420,9 +420,9 @@ export interface WatermarkConfig {
 /**
  * Draw a centred, rotated text watermark on every page and return the modified bytes.
  */
-export async function embedWatermark(pdfBytes: Uint8Array, config: WatermarkConfig): Promise<Uint8Array> {
+export async function embedWatermark(pdfBytes: Uint8Array, config: WatermarkConfig, fontFiles: FontFiles): Promise<Uint8Array> {
   const pdfDoc     = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-  const font       = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const font       = await embedFace(pdfDoc, fontFiles.regular);
   const grey       = rgb(0.5, 0.5, 0.5);
   const angleRad   = (config.angle * Math.PI) / 180;
   const lines      = config.text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
