@@ -10,7 +10,7 @@ import { pageBoxFromViewBox, type PageBox } from './page-box.js';
 
 // Cast to the pdfjs-dist type surface so all downstream code is fully typed
 const pdfjsLib = _pdfjsLib as unknown as typeof PDFJSLib;
-const { TextLayer } = pdfjsLib;
+const { TextLayer, AnnotationMode } = pdfjsLib;
 
 // Point the worker at the bundled worker file
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -50,6 +50,8 @@ export class PDFViewer {
   _io: IntersectionObserver | null;
   _pageBoxCache: Record<number, PageBox>;
   isSleeping: boolean;
+  /** Draw pages without the annotations stored in the PDF (form fields still show). */
+  annotationsHidden = false;
   onPageRendered?: (pageNum: number) => void;
 
   /**
@@ -209,6 +211,19 @@ export class PDFViewer {
       if (this._pendingRender.has(pageNum)) {
         await this._renderPage(pageNum);
       }
+    }
+  }
+
+  // Show or hide the annotations stored in the PDF. Pages in view are redrawn
+  // now; the rest are redrawn as they scroll into view.
+  async setAnnotationsHidden(hidden: boolean): Promise<void> {
+    if (this.annotationsHidden === hidden) return;
+    this.annotationsHidden = hidden;
+    if (!this.pdfDoc) return;
+    const visibleSet = this._getVisibleSet();
+    for (let i = 1; i <= this.pdfDoc.numPages; i++) {
+      if (visibleSet.has(i)) await this._renderPage(i);
+      else this._pendingRender.add(i);
     }
   }
 
@@ -479,7 +494,11 @@ export class PDFViewer {
 
     // Render PDF content
     const ctx = canvas.getContext('2d')!;
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    await page.render({
+      canvasContext:  ctx,
+      viewport,
+      annotationMode: this.annotationsHidden ? AnnotationMode.DISABLE : AnnotationMode.ENABLE_FORMS,
+    }).promise;
     wrapper.style.opacity = '';
 
     // Render text layer for selection (PDF.js 4.x class-based API)

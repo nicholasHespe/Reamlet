@@ -10,6 +10,9 @@ import type * as PDFLibNS from 'pdf-lib';
 import type { OutlineNode } from './types.js';
 const { PDFDocument } = _pdfLib as unknown as typeof PDFLibNS;
 import { FindBar }          from './find.js';
+import { ToolbarLayout }    from './toolbar.js';
+import { TextBar }          from './text-bar.js';
+import { buildSwatchPanel, markActiveSwatch, NO_FILL } from './palette.js';
 import type { Tab, CloseContext, Annotation } from './types.js';
 
 // ── State ──────────────────────────────────────────────────────
@@ -81,15 +84,17 @@ const tocTree        = document.getElementById('toc-tree')!;
 const contentArea    = document.getElementById('content-area')!;
 const pageInput      = document.getElementById('page-input') as HTMLInputElement;
 const pageTotal      = document.getElementById('page-total')!;
-const btnBold        = document.getElementById('btn-bold')!;
-const btnUnderline   = document.getElementById('btn-underline')!;
-const fontSizeInput  = document.getElementById('font-size-input') as HTMLInputElement;
 const colorBtn       = document.getElementById('color-btn')!;
 const colorDot       = document.getElementById('color-dot')!;
 const colorPanel     = document.getElementById('color-panel')!;
 const fillBtn        = document.getElementById('fill-btn')!;
 const fillDot        = document.getElementById('fill-dot')!;
 const fillPanel      = document.getElementById('fill-panel')!;
+const shapesBtn      = document.getElementById('btn-shapes')!;
+const shapesPanel    = document.getElementById('shapes-panel')!;
+const shapesIcon     = document.getElementById('shapes-icon')!;
+const btnFit         = document.getElementById('btn-fit')!;
+const btnHideAnnots  = document.getElementById('btn-hide-annots')!;
 const titleFilename  = document.getElementById('title-filename')!;
 const contextMenu    = document.getElementById('context-menu')!;
 const inputCtxMenu   = document.getElementById('input-ctx-menu')!;
@@ -266,7 +271,23 @@ viewerScrollbarThumb.addEventListener('mousedown', (e) => {
   document.body.style.userSelect = 'none';
 });
 
+// ── Toolbar layout ─────────────────────────────────────────────
+
+// Fold groups away as the window narrows: Document first, then Annotations,
+// then the view tools (page navigation never folds).
+const toolbarLayout = new ToolbarLayout(document.getElementById('tools-row')!, [
+  document.getElementById('group-document')!,
+  document.getElementById('group-annotate')!,
+  document.getElementById('group-main')!,
+]);
+
+// The formatting bar shown above whichever text box is being edited.
+const textBar = new TextBar();
+
 // ── Colour picker ──────────────────────────────────────────────
+
+buildSwatchPanel(colorPanel);
+buildSwatchPanel(fillPanel, { withNone: true });
 
 colorBtn.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -285,6 +306,20 @@ fillBtn.addEventListener('click', (e) => {
 });
 document.addEventListener('click', () => fillPanel.classList.add('hidden'));
 fillPanel.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Shapes menu ────────────────────────────────────────────────
+
+const SHAPE_TOOLS = ['line', 'arrow', 'rect', 'oval'];
+/** The shape the Shapes button shows: the one last picked. */
+let _lastShape = 'rect';
+
+shapesBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  colorPanel.classList.add('hidden');
+  fillPanel.classList.add('hidden');
+  shapesPanel.classList.toggle('hidden');
+});
+document.addEventListener('click', () => shapesPanel.classList.add('hidden'));
 
 // ── Context menu ───────────────────────────────────────────────
 
@@ -339,8 +374,7 @@ contextMenu.addEventListener('mousedown', (e) => {
       navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
       break;
     case 'highlight':
-      if (activeTab?.annotator) activeTab.annotator.setTool('highlight');
-      syncToolButtons('highlight');
+      _selectTool('highlight');
       break;
     case 'find': {
       const sel = window.getSelection()?.toString().trim();
@@ -558,6 +592,8 @@ function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array, s
   viewerHost.appendChild(pane);
 
   const viewer   = new PDFViewer(pages);
+  viewer.annotationsHidden = _annotationsHidden;
+  pane.classList.toggle('annotations-hidden', _annotationsHidden);
   const pdfBytes = pdfData instanceof Uint8Array ? pdfData.slice() : new Uint8Array(pdfData);
 
   const state: Tab = { id, filePath, sourceUrl, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
@@ -781,9 +817,7 @@ function switchTab(tab: Tab) {
 
   if (tab.annotator) {
     thicknessInput.value = String(tab.annotator.thickness);
-    fontSizeInput.value  = String(tab.annotator.textFontSize);
     syncToolButtons(tab.annotator.tool);
-    syncTextFormatButtons(tab.annotator);
   }
 
   syncSwatches(tab.annotator?.color);
@@ -794,6 +828,7 @@ function switchTab(tab: Tab) {
   _positionScrollbar();
   _positionScrollbarH();
   finder.onTabSwitch();
+  void _syncFitButton();
   if (tab._notBeenViewed) {
     tab._notBeenViewed = false;
     void fitWidth();
@@ -884,8 +919,7 @@ async function _wakeTab(tab: Tab) {
   renderTabBar();
 
   await tab.viewer.load(tab.pdfBytes);
-  tab.annotator = new Annotator(tab.viewer.pages, tab.viewer);
-  _patchAnnotatorForDirty(tab);
+  _createAnnotator(tab);
   if (tab._savedAnnotations?.length) {
     tab.annotator!.annotations = tab._savedAnnotations;
     tab.annotator!.redrawAll();
@@ -902,9 +936,7 @@ async function _wakeTab(tab: Tab) {
   renderTabBar();
   if (activeTab === tab) {
     thicknessInput.value = String(tab.annotator!.thickness);
-    fontSizeInput.value  = String(tab.annotator!.textFontSize);
     syncToolButtons(tab.annotator!.tool);
-    syncTextFormatButtons(tab.annotator!);
     syncSwatches(tab.annotator!.color);
     syncFillSwatches(tab.annotator!.fillColor);
     renderToc(tab.outline);
@@ -939,8 +971,7 @@ async function _loadTabContent(tab: Tab, preserveView = false) {
   tab.annotator?.destroy();
   try {
     await tab.viewer.load(tab.pdfBytes);
-    tab.annotator = new Annotator(tab.viewer.pages, tab.viewer);
-    _patchAnnotatorForDirty(tab);
+    _createAnnotator(tab);
     _pushUndo(tab);
     // Mark the initial loaded state as clean (only on first open, not after PDF ops or undo).
     if (tab._undoCleanIdx === undefined) tab._undoCleanIdx = tab._undoIdx!;
@@ -957,7 +988,6 @@ async function _loadTabContent(tab: Tab, preserveView = false) {
   renderTabBar();
   if (activeTab === tab) {
     syncToolButtons(tab.annotator!.tool);
-    syncTextFormatButtons(tab.annotator!);
     syncSwatches(tab.annotator!.color);
     syncFillSwatches(tab.annotator!.fillColor);
     renderToc(tab.outline);
@@ -1245,6 +1275,14 @@ async function reopenLastTab() {
   await _loadTabContent(tab);
 }
 
+// Give a tab a fresh annotator, wired to the text bar and to dirty tracking.
+function _createAnnotator(tab: Tab) {
+  tab.annotator = new Annotator(tab.viewer.pages, tab.viewer);
+  tab.annotator.onTextEditStart = (session) => textBar.show(session);
+  tab.annotator.onTextEditEnd   = () => textBar.hide();
+  _patchAnnotatorForDirty(tab);
+}
+
 function _patchAnnotatorForDirty(tab: Tab) {
   const orig  = tab.annotator!.annotations;
   const proxy = new Proxy(orig, {
@@ -1445,17 +1483,56 @@ async function _applyZoomNow(scale: number) {
   _updateHorizontalPadding();
   _syncScrollbarH();
   finder.onZoom();
+  void _syncFitButton();
+}
+
+/** The zoom at which page `pageNum` fills the width left beside the sidebars. */
+async function _fitWidthScale(tab: Tab, pageNum = 1): Promise<number> {
+  const v    = tab.viewer;
+  const vp   = await v.getViewport(pageNum);
+  const tocW = tocPanel.classList.contains('hidden') ? 0 : tocPanel.offsetWidth;
+  const gap  = Math.round(screen.width * 0.01);
+  const availableW = tab.pane.clientWidth - sidebar.offsetWidth - tocW - 2 * gap;
+  return Math.round((availableW / (vp.width / v.scale)) * 100) / 100;
 }
 
 async function fitWidth() {
   if (!activeTab) return;
-  const v    = activeTab.viewer;
-  const vp   = await v.getViewport(1);
-  const tocW = tocPanel.classList.contains('hidden') ? 0 : tocPanel.offsetWidth;
-  const gap  = Math.round(screen.width * 0.01);
-  const availableW = activeTab.pane.clientWidth - sidebar.offsetWidth - tocW - 2 * gap;
-  await _applyZoomNow(Math.round((availableW / (vp.width / v.scale)) * 100) / 100);
+  await _applyZoomNow(await _fitWidthScale(activeTab));
 }
+
+// Fit the whole of the page in view to the pane: its width and its height.
+async function fitPage() {
+  if (!activeTab) return;
+  const v       = activeTab.viewer;
+  const pageNum = v.getVisiblePageNum();
+  const vp      = await v.getViewport(pageNum);
+  const heightScale = Math.round(((activeTab.pane.clientHeight - 32) / (vp.height / v.scale)) * 100) / 100;
+  await _applyZoomNow(Math.min(await _fitWidthScale(activeTab, pageNum), heightScale));
+}
+
+async function _isFitWidth(tab: Tab): Promise<boolean> {
+  try {
+    return Math.abs(tab.viewer.scale - await _fitWidthScale(tab)) < 0.011;
+  } catch {
+    return false; // document still loading
+  }
+}
+
+// The fit button fits the width, or, when the width is already fitted, the page.
+async function _toggleFit() {
+  if (!activeTab) return;
+  if (await _isFitWidth(activeTab)) await fitPage();
+  else                              await fitWidth();
+}
+
+// Show on the fit button what pressing it will do.
+async function _syncFitButton() {
+  const fitPageNext = activeTab ? await _isFitWidth(activeTab) : false;
+  btnFit.classList.toggle('fit-page', fitPageNext);
+  btnFit.title = fitPageNext ? 'Fit page' : 'Fit width (Ctrl+0)';
+}
+window.addEventListener('resize', () => void _syncFitButton());
 
 async function fitHeight() {
   if (!activeTab) return;
@@ -1597,60 +1674,75 @@ function syncToolButtons(tool: string) {
   document.querySelectorAll('.tool-btn').forEach(btn => {
     btn.classList.toggle('active', (btn as HTMLElement).dataset.tool === tool);
   });
+  if (SHAPE_TOOLS.includes(tool)) _lastShape = tool;
+  shapesBtn.classList.toggle('active', SHAPE_TOOLS.includes(tool));
+  shapesIcon.innerHTML = document.querySelector(`#tool-${_lastShape} svg`)?.outerHTML ?? '';
   if (activeTab) activeTab.pane.classList.toggle('pan-active', tool === 'pan');
 }
 
-function syncTextFormatButtons(annotator: Annotator) {
-  btnBold.classList.toggle('active',      annotator?.textBold      ?? false);
-  btnUnderline.classList.toggle('active', annotator?.textUnderline ?? false);
+// Switch the active tab's tool. Annotating shows annotations again if they
+// were hidden, so nothing is drawn unseen.
+function _selectTool(tool: string) {
+  if (_annotationsHidden && tool !== 'select' && tool !== 'pan') void _setAnnotationsHidden(false);
+  activeTab?.annotator?.setTool(tool);
+  syncToolButtons(tool);
 }
 
 function syncSwatches(color: string | undefined) {
   if (!color) return;
-  colorPanel.querySelectorAll('.swatch').forEach(s => {
-    s.classList.toggle('active', (s as HTMLElement).dataset.color === color);
-  });
+  markActiveSwatch(colorPanel, color);
   colorDot.style.background = color;
 }
 
 // null means no fill — the "none" swatch, rather than any colour, is active.
 function syncFillSwatches(fillColor: string | null | undefined) {
   if (fillColor === undefined) return;
-  fillPanel.querySelectorAll('.swatch').forEach(s => {
-    const swatchColor = (s as HTMLElement).dataset.color === 'none' ? null : (s as HTMLElement).dataset.color;
-    s.classList.toggle('active', swatchColor === fillColor);
-  });
+  markActiveSwatch(fillPanel, fillColor);
   fillDot.classList.toggle('fill-none', !fillColor);
   if (fillColor) fillDot.style.background = fillColor;
+}
+
+// ── Hide annotations ───────────────────────────────────────────
+
+// A viewing aid for the whole window: hides the unsaved overlay and the
+// annotations saved in each PDF. Saving and printing are unaffected.
+let _annotationsHidden = false;
+
+async function _setAnnotationsHidden(hidden: boolean) {
+  _annotationsHidden = hidden;
+  btnHideAnnots.classList.toggle('active', hidden);
+  btnHideAnnots.title = hidden ? 'Show annotations' : 'Hide annotations';
+  for (const tab of tabs) tab.pane.classList.toggle('annotations-hidden', hidden);
+  // The tab on screen first, so what the user is looking at changes at once.
+  const ordered = activeTab ? [activeTab, ...tabs.filter(t => t !== activeTab)] : tabs;
+  for (const tab of ordered) await tab.viewer.setAnnotationsHidden(hidden);
 }
 
 // ── Toolbar event wiring ───────────────────────────────────────
 
 document.querySelectorAll('.tool-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const tool = (btn as HTMLElement).dataset.tool ?? '';
-    if (activeTab?.annotator) activeTab.annotator.setTool(tool);
-    syncToolButtons(tool);
+    shapesPanel.classList.add('hidden');
+    _selectTool((btn as HTMLElement).dataset.tool ?? '');
   });
 });
 
-colorPanel.querySelectorAll('.swatch').forEach(s => {
-  s.addEventListener('click', () => {
-    const color = (s as HTMLElement).dataset.color ?? '';
-    if (activeTab?.annotator) activeTab.annotator.setColor(color);
-    syncSwatches(color);
-    colorPanel.classList.add('hidden');
-  });
+colorPanel.addEventListener('click', (e) => {
+  const swatch = (e.target as Element).closest<HTMLElement>('.swatch');
+  if (!swatch) return;
+  const color = swatch.dataset.color!;
+  activeTab?.annotator?.setColor(color);
+  syncSwatches(color);
+  colorPanel.classList.add('hidden');
 });
 
-fillPanel.querySelectorAll('.swatch').forEach(s => {
-  s.addEventListener('click', () => {
-    const raw   = (s as HTMLElement).dataset.color ?? 'none';
-    const color = raw === 'none' ? null : raw;
-    if (activeTab?.annotator) activeTab.annotator.setFillColor(color);
-    syncFillSwatches(color);
-    fillPanel.classList.add('hidden');
-  });
+fillPanel.addEventListener('click', (e) => {
+  const swatch = (e.target as Element).closest<HTMLElement>('.swatch');
+  if (!swatch) return;
+  const color = swatch.dataset.color === NO_FILL ? null : swatch.dataset.color!;
+  activeTab?.annotator?.setFillColor(color);
+  syncFillSwatches(color);
+  fillPanel.classList.add('hidden');
 });
 
 document.getElementById('btn-undo')!.addEventListener('click', async () => {
@@ -1672,28 +1764,15 @@ document.getElementById('btn-redo')!.addEventListener('click', async () => {
   _undoing.add(tab.id);
   try { await _applyUndo(tab, tab._undoStack[idx + 1]); } finally { _undoing.delete(tab.id); }
 });
-document.getElementById('btn-fit')!.addEventListener('click',    fitWidth);
-document.getElementById('btn-fit-h')!.addEventListener('click',  fitHeight);
-document.getElementById('btn-rotate')!.addEventListener('click', (e) => rotate(e.shiftKey));
-document.getElementById('btn-print')!.addEventListener('click',  () => printTab(activeTab));
-
-btnBold.addEventListener('click', () => {
-  if (!activeTab?.annotator) return;
-  const next = !activeTab.annotator.textBold;
-  activeTab.annotator.setTextBold(next);
-  btnBold.classList.toggle('active', next);
-});
-
-btnUnderline.addEventListener('click', () => {
-  if (!activeTab?.annotator) return;
-  const next = !activeTab.annotator.textUnderline;
-  activeTab.annotator.setTextUnderline(next);
-  btnUnderline.classList.toggle('active', next);
-});
-
-fontSizeInput.addEventListener('change', () => {
-  if (activeTab?.annotator) activeTab.annotator.setTextFontSize(Number(fontSizeInput.value));
-});
+btnFit.addEventListener('click', () => void _toggleFit());
+document.getElementById('btn-rotate')!.addEventListener('click',   (e) => rotate(e.shiftKey));
+document.getElementById('btn-zoom-in')!.addEventListener('click',  () => zoom(0.1));
+document.getElementById('btn-zoom-out')!.addEventListener('click', () => zoom(-0.1));
+document.getElementById('btn-find')!.addEventListener('click',     () => finder.open());
+document.getElementById('btn-print')!.addEventListener('click',    () => printTab(activeTab));
+document.getElementById('btn-save')!.addEventListener('click',     () => saveTab(activeTab));
+document.getElementById('btn-save-as')!.addEventListener('click',  () => saveTabCopy(activeTab));
+btnHideAnnots.addEventListener('click', () => void _setAnnotationsHidden(!_annotationsHidden));
 
 thicknessInput.addEventListener('input', () => {
   if (activeTab?.annotator) activeTab.annotator.setThickness(Number(thicknessInput.value));
@@ -1775,10 +1854,7 @@ document.addEventListener('keydown', async (e) => {
     l: 'line', r: 'rect', o: 'oval', a: 'arrow', e: 'eraser', p: 'pan',
   };
   const tool = (toolMap as Record<string, string>)[e.key];
-  if (tool) {
-    if (activeTab?.annotator) activeTab.annotator.setTool(tool);
-    syncToolButtons(tool);
-  }
+  if (tool) _selectTool(tool);
 });
 
 // ── Custom title bar menus ─────────────────────────────────────
@@ -2447,8 +2523,10 @@ document.getElementById('close-save')!.addEventListener('click', async () => {
 
 // ── Init ───────────────────────────────────────────────────────
 
-// Sync colour dot to initial active swatch (default: red)
-const initSwatch = document.querySelector('.swatch[data-color="#ff3333"]');
-if (initSwatch) { colorDot.style.background = (initSwatch as HTMLElement).dataset.color ?? ''; initSwatch.classList.add('active'); }
+// Default colours and tool until a document's own annotator takes over
+syncSwatches('#ff3333');
+syncFillSwatches(null);
+syncToolButtons('select');
+toolbarLayout.fit();
 
 emptyState.style.display = '';
