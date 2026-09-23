@@ -8,6 +8,7 @@ import {
   TEXT_LINE_GAP, TEXT_FONT_STACK, textBaselineOffset, textUnderlineThickness,
   textBlockHeight, wrapText, type MeasureText,
 } from './text-layout.js';
+import { arrowGeometry, arrowHeadLength } from './arrow-geometry.js';
 
 /** Width of a newly placed text box, in PDF points. */
 const TEXT_DEFAULT_WIDTH = 160;
@@ -961,18 +962,20 @@ export class Annotator {
       if (fill) ctx.fill();
       ctx.stroke();
     } else if (type === 'arrow') {
-      const headLen = Math.max(10, ctx.lineWidth * 4);
-      const angle   = Math.atan2(y2 - y1, x2 - x1);
+      // The head is sized in points (see arrow-geometry.ts); lineWidth is in
+      // canvas pixels, so convert there and back.
+      const scale = this.viewer?.scale ?? 1;
+      const { shaftEnd, head } = arrowGeometry([x1, y1], [x2, y2], arrowHeadLength(ctx.lineWidth / scale) * scale);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
+      ctx.lineTo(...shaftEnd);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = ctx.strokeStyle;
       ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
-      ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+      ctx.moveTo(...head[0]);
+      ctx.lineTo(...head[1]);
+      ctx.lineTo(...head[2]);
       ctx.closePath();
       ctx.fill();
     }

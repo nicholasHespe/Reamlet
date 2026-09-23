@@ -91,6 +91,8 @@ export async function readAnnotations(bytes, pageIdx = 0) {
       inkList:    inkList ? inkList.asArray().map(e => nums(doc.context.lookup(e) ?? e)) : null,
       color:      get('C')  ? nums(get('C'))  : null,
       fillColor:  get('IC') ? nums(get('IC')) : null,
+      lineEndings: get('LE') ? get('LE').asArray().map(n => n.asString().replace(/^\//, '')) : null,
+      hasAppearance: !!get('AP'),
     });
   }
   return out;
@@ -137,4 +139,55 @@ export async function readFilledRects(bytes, pageNum = 1) {
     }
   }
   return rects;
+}
+
+// Number of coordinates each path-construction operator consumes.
+const PATH_ARG_COUNTS = {
+  [pdfjs.OPS.moveTo]: 2, [pdfjs.OPS.lineTo]: 2, [pdfjs.OPS.curveTo]: 6,
+  [pdfjs.OPS.curveTo2]: 4, [pdfjs.OPS.curveTo3]: 4, [pdfjs.OPS.closePath]: 0,
+  [pdfjs.OPS.rectangle]: 4,
+};
+const PAINT_OPS = new Map(
+  ['stroke', 'closeStroke', 'fill', 'eoFill', 'fillStroke', 'eoFillStroke',
+   'closeFillStroke', 'closeEOFillStroke', 'endPath'].map(name => [pdfjs.OPS[name], name]),
+);
+
+/**
+ * The paths each annotation's appearance paints, in the order PDF.js renders
+ * them. Each annotation gives its /Rect and a list of paths; a path lists the
+ * points its moveTo/lineTo operators visit, whether it was closed, and the
+ * operator that painted it. Coordinates are in the appearance's own space,
+ * which is page space for an appearance whose BBox is its /Rect.
+ */
+export async function readAnnotationPaths(bytes, pageNum = 1) {
+  const page = await (await loadPdfJs(bytes)).getPage(pageNum);
+  const { fnArray, argsArray } = await page.getOperatorList({ annotationMode: pdfjs.AnnotationMode.ENABLE });
+
+  const annots = [];
+  let current = null;
+  let pending = null;
+  for (let i = 0; i < fnArray.length; i++) {
+    const op = fnArray[i], args = argsArray[i];
+    if (op === pdfjs.OPS.beginAnnotation) {
+      current = { rect: Array.from(args[1]), paths: [] };
+      annots.push(current);
+    } else if (op === pdfjs.OPS.endAnnotation) {
+      current = null;
+    } else if (current && op === pdfjs.OPS.constructPath) {
+      const [ops, coords] = args;
+      const points = [];
+      let closed = false;
+      let k = 0;
+      for (const pathOp of ops) {
+        if (pathOp === pdfjs.OPS.moveTo || pathOp === pdfjs.OPS.lineTo) points.push([coords[k], coords[k + 1]]);
+        if (pathOp === pdfjs.OPS.closePath) closed = true;
+        k += PATH_ARG_COUNTS[pathOp] ?? 0;
+      }
+      pending = { points, closed };
+    } else if (current && pending && PAINT_OPS.has(op)) {
+      current.paths.push({ ...pending, painted: PAINT_OPS.get(op) });
+      pending = null;
+    }
+  }
+  return annots;
 }
