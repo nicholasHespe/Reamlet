@@ -622,6 +622,8 @@ button[data-toggle].active .tdrop-check::before { content: '\2713'; }
 .tab:hover { border-color: var(--border); background: var(--row-hover); }
 .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .tab.loading .tab-name { color: var(--text-dim); }
+.tab.unavailable .tab-name { color: var(--text-dim); font-style: italic; }
+.tab.unavailable.active .tab-name { color: rgba(255, 255, 255, 0.7); }
 .tab.drag-over { border-color: var(--accent) !important; background: var(--row-active) !important; }
 
 .tab .tab-name {
@@ -887,6 +889,28 @@ button[data-toggle].active .tdrop-check::before { content: '\2713'; }
 }
 /* Hide annotations: the unsaved overlay here, saved ones by the viewer */
 .viewer-pane.annotations-hidden .annot-canvas { visibility: hidden; }
+
+/* ── Tab whose document can't be shown (e.g. its file is gone) ── */
+.tab-unavailable {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  color: #a9adb0;
+}
+.tab-unavailable-reason { font-size: 18px; }
+.tab-unavailable-path {
+  font-size: 12px;
+  opacity: 0.75;
+  max-width: 80%;
+  word-break: break-all;
+  user-select: text;
+}
 
 /* ── Empty state ──────────────────────────────────────────────── */
 #empty-state {

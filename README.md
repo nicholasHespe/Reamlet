@@ -39,6 +39,7 @@ To open PDFs directly from Chrome or Edge, install the [Reamlet browser extensio
 - **Rotation** — rotate all pages or individual pages; persisted per session
 - **Save / Save As** — saves annotations directly into the PDF file so they open in any viewer
 - **Memory-efficient** — inactive tabs are put to sleep automatically and wake on demand
+- **Session restore** — reopen your tabs after a crash, power loss or restart, or every time Reamlet starts (File menu); a tab whose file has gone shows as "File not found" instead of failing
 - **Set as default** — install once, set Reamlet as your default PDF viewer and forget
 
 ---

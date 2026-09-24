@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { embedAnnotations } from '../out/renderer/saver.js';
 import {
-  makePdf, fakeViewer, oracle, readAnnotations, readDrawnText,
+  makePdf, fakeViewer, oracle, readAnnotations, readPaintedText, FONT_FILES,
 } from './helpers/pdf-fixtures.mjs';
 
 // Page geometries under test. `box` is the region a viewer displays.
@@ -39,7 +39,7 @@ function assertPoint(actual, expected, label) {
 
 async function save(bytes, annotations, userRotations) {
   const viewer = await fakeViewer(bytes, { userRotations });
-  return embedAnnotations(bytes, annotations, viewer);
+  return embedAnnotations(bytes, annotations, viewer, FONT_FILES);
 }
 
 for (const geom of GEOMETRIES) {
@@ -132,7 +132,7 @@ for (const geom of GEOMETRIES) {
       const baseline = fontSize / 2 + 2;
       const want = at(0.3, 0.2 + baseline / displayHeight);
 
-      const drawn = await readDrawnText(out);
+      const drawn = await readPaintedText(out);
       assert.equal(drawn.length, 1, `${label}: expected exactly one text run`);
       assert.equal(drawn[0].str, 'Reamlet');
       assertPoint([drawn[0].x, drawn[0].y], want, `${label} baseline origin`);

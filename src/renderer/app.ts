@@ -4,6 +4,7 @@
 import { PDFViewer }        from './viewer.js';
 import { Annotator }        from './annotator.js';
 import { embedAnnotations, embedFooter, embedWatermark } from './saver.js';
+import { loadFontFiles }    from './fonts.js';
 // @ts-expect-error — pdf-lib is imported via direct path for Electron's file:// ESM loader
 import * as _pdfLib       from '../../node_modules/pdf-lib/dist/pdf-lib.esm.js';
 import type * as PDFLibNS from 'pdf-lib';
@@ -135,8 +136,8 @@ async function _setTheme(mode: 'light' | 'dark' | 'system') {
 // ── Find bar ───────────────────────────────────────────────────
 
 const finder = new FindBar({
-  getTabs:      () => tabs,
-  getActiveTab: () => activeTab,
+  getTabs:      () => tabs.filter(t => !t.unavailable),
+  getActiveTab: () => activeTab?.unavailable ? null : activeTab,
   switchTab,
 });
 
@@ -221,7 +222,7 @@ function _positionScrollbarH() {
 // Pad pdf-pages so the document can be scrolled until its edges are visible
 // past the sidebar and TOC panel. Always applied so margin:auto centering works.
 function _updateHorizontalPadding() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   const pane    = activeTab.pane;
   const pagesEl = pane.querySelector('.pdf-pages') as HTMLElement | null;
   if (!pagesEl) return;
@@ -333,7 +334,7 @@ function _hideTabContextMenu() {
 }
 
 viewerHost.addEventListener('contextmenu', (e) => {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   // Editable fields get their own menu, built from the main-process event.
   if ((e.target as Element)?.closest('textarea, input, [contenteditable="true"]')) return;
   e.preventDefault();
@@ -593,7 +594,7 @@ function createTab(filePath: string | null, pdfData: ArrayBuffer | Uint8Array, s
   pane.classList.toggle('annotations-hidden', _annotationsHidden);
   const pdfBytes = pdfData instanceof Uint8Array ? pdfData.slice() : new Uint8Array(pdfData);
 
-  const state: Tab = { id, filePath, sourceUrl, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, sleeping: false, lastActive: Date.now() };
+  const state: Tab = { id, filePath, sourceUrl, pdfBytes, viewer, annotator: null, outline: null, pane, dirty: false, tabEl: null, loadingEl, unavailable: null, sleeping: false, lastActive: Date.now() };
   // A deferred (off-screen) page render clears that page's annotation canvas as a
   // side effect of resizing it — repaint from the live annotator so annotations
   // don't disappear when a page scrolled off-screen during zoom/rotate comes back
@@ -607,7 +608,8 @@ function renderTabBar() {
   tabBar.innerHTML = '';
   tabs.forEach(t => {
     const el = document.createElement('div');
-    el.className = 'tab' + (t === activeTab ? ' active' : '') + (t.loadingEl || t.sleeping ? ' loading' : '');
+    el.className = 'tab' + (t === activeTab ? ' active' : '') + (t.loadingEl || t.sleeping ? ' loading' : '')
+                 + (t.unavailable ? ' unavailable' : '');
     el.dataset.id = String(t.id);
     el.draggable  = true;
 
@@ -725,6 +727,7 @@ function renderTabBar() {
 
     tabBar.appendChild(el);
   });
+  _reportSession();
 }
 
 // ── Cross-window drag: tab bar as drop target ──────────────────
@@ -809,6 +812,13 @@ function switchTab(tab: Tab) {
 
   if (tab.sleeping) {
     _wakeTab(tab); // async; will update UI when done
+    return;
+  }
+
+  if (tab.unavailable) {
+    renderToc(null);
+    updatePageDisplay(tab);
+    void _loadFromDisk(tab); // the file may be back, e.g. a network drive reconnected
     return;
   }
 
@@ -951,12 +961,120 @@ function _sleepCheck() {
 
 setInterval(_sleepCheck, 15_000);
 
+// ── Session: tabs that outlive the app ────────────────────────
+
+let _lastReportedSession = '';
+
+// Tell main which of this window's tabs a restart should reopen: those backed
+// by a file on disk, in tab-bar order.
+function _reportSession() {
+  const restorable = tabs.filter(t => t.filePath && /[\\/]/.test(t.filePath));
+  const session = {
+    tabs:        restorable.map(t => ({ filePath: t.filePath!, sourceUrl: t.sourceUrl })),
+    activeIndex: activeTab ? restorable.indexOf(activeTab) : -1,
+  };
+  const json = JSON.stringify(session);
+  if (json === _lastReportedSession) return;
+  _lastReportedSession = json;
+  window.api.updateSession(session);
+}
+
+// Reopen the tabs a previous run left open, showing the one that was active
+// first. A file that has gone missing stays as a greyed-out tab.
+window.api.onRestoreSession(async ({ tabs: saved, activeIndex }) => {
+  const restored = saved.map(({ filePath, sourceUrl }) => createTab(filePath, new Uint8Array(0), sourceUrl));
+  if (restored.length === 0) return;
+  renderTabBar();
+  const shown = restored[activeIndex] ?? restored[restored.length - 1];
+  switchTab(shown);
+  for (const tab of [shown, ...restored.filter(t => t !== shown)]) {
+    if (tabs.includes(tab)) await _loadFromDisk(tab);
+  }
+});
+
+// (Re)read a tab's document from its file. If it can't be read, the tab stays
+// open, greyed out, so the user can see what is missing.
+async function _loadFromDisk(tab: Tab) {
+  let file: { filePath: string; buffer: ArrayBuffer } | null = null;
+  try {
+    if (tab.filePath) file = await window.api.openFileFromPath(tab.filePath);
+  } catch { /* treated as missing */ }
+  if (!tabs.includes(tab)) return; // closed while reading
+  if (!file) {
+    _showUnavailable(tab, 'File not found');
+    return;
+  }
+  if (tab.unavailable) {
+    tab.unavailable = null;
+    tab.pane.querySelector('.tab-unavailable')?.remove();
+    const loadingEl = document.createElement('div');
+    loadingEl.className = 'loading-overlay';
+    loadingEl.innerHTML = '<div class="spinner"></div>';
+    tab.pane.appendChild(loadingEl);
+    tab.loadingEl = loadingEl;
+    renderTabBar();
+  }
+  tab.pdfBytes = new Uint8Array(file.buffer);
+  await _loadTabContent(tab, false, true);
+}
+
+// Grey a tab out with the reason its document can't be shown.
+function _showUnavailable(tab: Tab, reason: string) {
+  tab.unavailable = reason;
+  tab.annotator?.destroy();
+  tab.annotator = null;
+  tab.viewer.sleep();
+  tab.loadingEl?.remove();
+  tab.loadingEl = null;
+
+  tab.pane.querySelector('.tab-unavailable')?.remove();
+  const note  = document.createElement('div');
+  note.className = 'tab-unavailable';
+  const title = document.createElement('div');
+  title.className = 'tab-unavailable-reason';
+  title.textContent = reason;
+  const where = document.createElement('div');
+  where.className = 'tab-unavailable-path';
+  where.textContent = tab.filePath ?? '';
+  note.append(title, where);
+  tab.pane.appendChild(note);
+
+  renderTabBar();
+  if (activeTab === tab) {
+    renderToc(null);
+    updatePageDisplay(tab);
+  }
+}
+
+// Settings: restore tabs after an unexpected exit; keep them after a normal one too.
+let _sessionSettings: SessionSettingsData = { restoreSession: true, persistentTabs: false };
+window.api.getSessionSettings().then(settings => {
+  _sessionSettings = settings;
+  _syncSessionMenu();
+});
+
+function _syncSessionMenu() {
+  document.querySelectorAll('[data-toggle="restore-session"]').forEach(btn => {
+    btn.classList.toggle('active', _sessionSettings.restoreSession);
+  });
+  document.querySelectorAll('[data-toggle="persistent-tabs"]').forEach(btn => {
+    btn.classList.toggle('active', _sessionSettings.persistentTabs);
+  });
+}
+
+async function _toggleSessionSetting(key: keyof SessionSettingsData) {
+  _sessionSettings = await window.api.setSessionSettings({ [key]: !_sessionSettings[key] });
+  _syncSessionMenu();
+}
+
 // ── Tab content loader (async; shows spinner until done) ────────
 
 // preserveView keeps the current zoom and scroll position instead of fitting to
 // width — used when reloading a document the user is already reading (e.g. after
 // a save), where snapping the view would be jarring.
-async function _loadTabContent(tab: Tab, preserveView = false) {
+// keepOnError leaves a tab that fails to load open, greyed out, instead of
+// alerting and closing it — for tabs the user didn't just ask to open.
+async function _loadTabContent(tab: Tab, preserveView = false, keepOnError = false) {
   const scrollTop = preserveView ? tab.pane.scrollTop : 0;
   // Reloading replaces the annotator; without this the old one keeps its
   // document-level mouse/key listeners attached for the life of the window.
@@ -969,6 +1087,10 @@ async function _loadTabContent(tab: Tab, preserveView = false) {
     if (tab._undoCleanIdx === undefined) tab._undoCleanIdx = tab._undoIdx!;
     tab.outline = await tab.viewer.getOutline();
   } catch (err) {
+    if (keepOnError) {
+      _showUnavailable(tab, 'This file could not be opened');
+      return;
+    }
     const name = tab.filePath ? tab.filePath.split(/[\\/]/).pop() : 'file';
     alert(`Could not open "${name}": ${(err as Error).message}`);
     closeTab(tab);
@@ -1084,7 +1206,7 @@ async function saveTab(tab: Tab | null) {
     return false; // tab is still loading, not ready to save
   }
 
-  const bytes = await embedAnnotations(tab.pdfBytes, annotations, viewer);
+  const bytes = await embedAnnotations(tab.pdfBytes, annotations, viewer, await loadFontFiles());
 
   // Real on-disk file: confirm overwrite, then save.
   if (tab.filePath && /[\\/]/.test(tab.filePath)) {
@@ -1141,7 +1263,7 @@ async function saveTabCopy(tab: Tab | null) {
     return false;
   }
 
-  const bytes       = await embedAnnotations(tab.pdfBytes, annotations, viewer);
+  const bytes       = await embedAnnotations(tab.pdfBytes, annotations, viewer, await loadFontFiles());
   const defaultPath = (tab._suggestedDir && tab._suggestedName)
     ? tab._suggestedDir + '/' + tab._suggestedName
     : tab.filePath ?? undefined;
@@ -1225,7 +1347,7 @@ function showDialog(options: {
 }
 
 async function printTab(tab: Tab | null) {
-  if (!tab) return;
+  if (!tab || tab.unavailable) return;
   if (!tab.filePath) {
     await showDialog({ title: 'Print', message: 'Save the document before printing.', buttons: ['OK'], defaultId: 0, cancelId: 0 });
     return;
@@ -1382,7 +1504,7 @@ async function _applyUndo(tab: Tab, entry: { pdfBytes: Uint8Array; annotations: 
 // Immediately apply a CSS scale transform to the page container for visual
 // feedback, then re-render at the true scale after a 250 ms debounce.
 function zoom(delta: number, cursorX?: number, cursorY?: number) {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   const v        = activeTab.viewer;
   const newScale = Math.max(0.25, Math.min(5,
     Math.round(((_zoomTarget ?? v.scale) + delta) * 100) / 100));
@@ -1429,7 +1551,7 @@ function zoom(delta: number, cursorX?: number, cursorY?: number) {
 // Cancel any pending debounce, remove the CSS transform, and synchronously
 // run the full re-render at the given scale. Used by fitWidth/fitHeight/Ctrl+R.
 async function _applyZoomNow(scale: number) {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   clearTimeout(_zoomTimer ?? undefined);
   _zoomTimer  = null;
   _zoomTarget = null;
@@ -1491,13 +1613,13 @@ async function _fitWidthScale(tab: Tab, pageNum = 1): Promise<number> {
 }
 
 async function fitWidth() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   await _applyZoomNow(await _fitWidthScale(activeTab));
 }
 
 // Fit the whole of the page in view to the pane: its width and its height.
 async function fitPage() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   const v       = activeTab.viewer;
   const pageNum = v.getVisiblePageNum();
   const vp      = await v.getViewport(pageNum);
@@ -1515,7 +1637,7 @@ async function _isFitWidth(tab: Tab): Promise<boolean> {
 
 // The fit button fits the width, or, when the width is already fitted, the page.
 async function _toggleFit() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   if (await _isFitWidth(activeTab)) await fitPage();
   else                              await fitWidth();
 }
@@ -1529,7 +1651,7 @@ async function _syncFitButton() {
 window.addEventListener('resize', () => void _syncFitButton());
 
 async function fitHeight() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   const v  = activeTab.viewer;
   const vp = await v.getViewport(v.getVisiblePageNum());
   await _applyZoomNow(Math.round(((activeTab.pane.clientHeight - 32) / (vp.height / v.scale)) * 100) / 100);
@@ -1538,7 +1660,7 @@ async function fitHeight() {
 // ── Rotate ─────────────────────────────────────────────────────
 
 async function rotate(singlePage: boolean) {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   const v = activeTab.viewer;
   const targetPage = singlePage ? v.getVisiblePageNum() : null;
   if (singlePage) await v.rotatePage(v.getVisiblePageNum(), 90);
@@ -1553,7 +1675,7 @@ async function rotate(singlePage: boolean) {
 // ── Page navigation ─────────────────────────────────────────────
 
 function updatePageDisplay(tab: Tab | null) {
-  if (!tab?.viewer) {
+  if (!tab?.viewer || tab.unavailable) {
     pageInput.value       = '1';
     pageTotal.textContent = '/ 1';
     return;
@@ -1586,7 +1708,7 @@ function attachScrollListener(tab: Tab) {
 }
 
 function jumpToPage(pageNum: number) {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   const n = Math.max(1, Math.min(activeTab.viewer.pageCount, pageNum));
   activeTab.viewer.scrollToPage(n);
   pageInput.value = String(n);
@@ -1652,7 +1774,7 @@ function _buildTocNodes(items: OutlineNode[], container: HTMLElement) {
 }
 
 async function _navigateToOutlineItem(item: OutlineNode) {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   const dest    = item.dest ?? item.url;
   if (!dest) return;
   const pageNum = await activeTab.viewer.resolveOutlineDest(dest);
@@ -1907,6 +2029,8 @@ const _menuActions = {
   'theme-dark':   () => _setTheme('dark'),
   'theme-system': () => _setTheme('system'),
   'toggle-reuse-tab': () => _toggleReuseTab(),
+  'toggle-restore-session': () => _toggleSessionSetting('restoreSession'),
+  'toggle-persistent-tabs': () => _toggleSessionSetting('persistentTabs'),
 };
 
 function _closeAllDropdowns() {
@@ -2040,7 +2164,7 @@ window.api.onOpenFileData(async ({ filePath, buffer, sourceUrl }) => {
 let _combineOrder: Tab[] = [];
 
 document.getElementById('btn-combine')!.addEventListener('click', () => {
-  if (tabs.length < 2) { alert('Open at least 2 PDF files to combine.'); return; }
+  if (tabs.filter(t => !t.unavailable).length < 2) { alert('Open at least 2 PDF files to combine.'); return; }
   _openCombineModal();
 });
 document.getElementById('combine-cancel')!.addEventListener('click', () => {
@@ -2052,7 +2176,7 @@ function _openCombineModal() {
   _combineOrder = [];
   const list = document.getElementById('combine-list')!;
   list.innerHTML = '';
-  tabs.forEach((tab, i) => {
+  tabs.filter(t => !t.unavailable).forEach((tab, i) => {
     const item  = document.createElement('div');
     item.className   = 'combine-item';
     item.dataset.tabIdx = String(i);
@@ -2147,7 +2271,7 @@ document.getElementById('reorder-cancel')!.addEventListener('click', () => {
 document.getElementById('reorder-ok')!.addEventListener('click', _executeReorder);
 
 async function _openReorderModal() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   const tab       = activeTab;
   const count     = tab.viewer.pageCount;
   const container = document.getElementById('reorder-pages')!;
@@ -2264,7 +2388,7 @@ async function _openReorderModal() {
 }
 
 async function _executeReorder() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   document.getElementById('reorder-modal')!.classList.add('hidden');
 
   const tab       = activeTab;
@@ -2382,7 +2506,7 @@ _setupFooterColSelect('right');
 (document.getElementById('footer-fontsize') as HTMLInputElement).addEventListener('input', _drawFooterPreview);
 
 document.getElementById('btn-footer')!.addEventListener('click', () => {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   document.getElementById('footer-modal')!.classList.remove('hidden');
   _drawFooterPreview();
 });
@@ -2392,7 +2516,7 @@ document.getElementById('footer-cancel')!.addEventListener('click', () => {
 document.getElementById('footer-ok')!.addEventListener('click', _executeFooter);
 
 async function _executeFooter() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   document.getElementById('footer-modal')!.classList.add('hidden');
 
   const left     = _resolveFooterColForEmbed('left');
@@ -2403,7 +2527,7 @@ async function _executeFooter() {
   if (!left && !center && !right) return;
 
   const tab   = activeTab;
-  const bytes = await embedFooter(tab.pdfBytes, { left, center, right, fontSize });
+  const bytes = await embedFooter(tab.pdfBytes, { left, center, right, fontSize }, await loadFontFiles());
 
   tab.pdfBytes = bytes;
   tab.annotator!.clear();
@@ -2459,7 +2583,7 @@ function _drawWatermarkPreview() {
 }
 
 document.getElementById('btn-watermark')!.addEventListener('click', () => {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   document.getElementById('watermark-modal')!.classList.remove('hidden');
   _drawWatermarkPreview();
 });
@@ -2480,7 +2604,7 @@ _wmOpacityInput.addEventListener('input', () => {
 (document.getElementById('watermark-angle')    as HTMLInputElement).addEventListener('change', _drawWatermarkPreview);
 
 async function _executeWatermark() {
-  if (!activeTab) return;
+  if (!activeTab || activeTab.unavailable) return;
   document.getElementById('watermark-modal')!.classList.add('hidden');
 
   const text     = (document.getElementById('watermark-text')     as HTMLTextAreaElement).value
@@ -2492,7 +2616,7 @@ async function _executeWatermark() {
   if (!text) return;
 
   const tab   = activeTab;
-  const bytes = await embedWatermark(tab.pdfBytes, { text, fontSize, opacity, angle });
+  const bytes = await embedWatermark(tab.pdfBytes, { text, fontSize, opacity, angle }, await loadFontFiles());
 
   tab.pdfBytes = bytes;
   tab.annotator!.clear();

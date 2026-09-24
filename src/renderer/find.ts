@@ -12,6 +12,14 @@ interface TextContentItem {
   str: string; transform: number[]; width: number; height: number;
 }
 
+/** The parts of a PDF.js annotation record that searching FreeText needs. */
+interface AnnotationData {
+  subtype: string;
+  rect: number[];
+  /** Lines of text PDF.js read out of the annotation's appearance, when it has one. */
+  textContent?: string[];
+}
+
 // Cast to the pdfjs-dist type surface so all downstream code is fully typed
 const pdfjsLib = _pdfjsLib as unknown as typeof PDFJSLib;
 
@@ -202,18 +210,32 @@ export class FindBar {
     for (let p = 1; p <= numPages; p++) {
       if (tab._findCache.has(p)) continue;
       const page = await pdfDoc.getPage(p);
-      const tc   = await page.getTextContent();
-      tab._findCache.set(p, {
-        items: (tc.items as unknown[])
-          .filter((item): item is TextContentItem => typeof item === 'object' && item !== null && 'str' in item)
-          .map(item => ({
-            str:    item.str,
-            x:      item.transform[4],
-            y:      item.transform[5],
-            width:  item.width,
-            height: item.height,
-          })),
-      });
+      const [tc, annotations] = await Promise.all([page.getTextContent(), page.getAnnotations()]);
+      const textItems = (tc.items as unknown[])
+        .filter((item): item is TextContentItem => typeof item === 'object' && item !== null && 'str' in item)
+        .map(item => ({
+          str:    item.str,
+          x:      item.transform[4],
+          y:      item.transform[5],
+          width:  item.width,
+          height: item.height,
+        }));
+      // Saved text annotations are FreeText annotations, whose text is in their
+      // appearance stream rather than the page's own content.
+      const freeTextItems = (annotations as AnnotationData[])
+        .filter(a => a.subtype === 'FreeText' && a.textContent?.length)
+        .map(a => {
+          const [x0, y0, x1, y1] = a.rect;
+          return {
+            str:    a.textContent!.join(' '),
+            x:      Math.min(x0, x1),
+            y:      Math.min(y0, y1),
+            width:  Math.abs(x1 - x0),
+            height: Math.abs(y1 - y0),
+            whole:  true,
+          };
+        });
+      tab._findCache.set(p, { items: [...textItems, ...freeTextItems] });
     }
 
     if (tempDoc) tempDoc.destroy();
@@ -296,8 +318,8 @@ export class FindBar {
       entry.items.forEach((item, itemIdx) => {
         matcher(item.str).forEach(({ start, end }) => {
           const len  = item.str.length || 1;
-          const xOff = (start / len) * item.width;
-          const xEnd = (end   / len) * item.width;
+          const xOff = item.whole ? 0          : (start / len) * item.width;
+          const xEnd = item.whole ? item.width : (end   / len) * item.width;
           matches.push({
             tabId:     tab.id,
             pageNum:   p,
