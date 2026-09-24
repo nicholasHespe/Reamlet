@@ -60,6 +60,7 @@ interface Window {
     getPrinters:            ()                                                          => Promise<{ name: string; isDefault: boolean }[]>;
     openPrinterPreferences: (printerName: string)                                      => Promise<{ ok: boolean; error?: string }>;
     executePrint: (options: {
+      pdfBytes:    ArrayBuffer;
       deviceName:  string;
       copies:      number;
       color:       boolean;

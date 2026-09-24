@@ -29,6 +29,32 @@ export function pageBoxFromViewBox(viewBox: number[]): PageBox {
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
+/** A rectangle as pdf-lib reports a page's MediaBox or CropBox. */
+interface Box { x: number; y: number; width: number; height: number }
+
+/**
+ * The visible box of a pdf-lib page — the CropBox clipped to the MediaBox, with
+ * either box's corners normalised in case they were written the other way round.
+ */
+export function visibleBox(page: { getMediaBox(): Box; getCropBox(): Box }): PageBox {
+  const norm = (b: Box) => ({
+    x0: Math.min(b.x, b.x + b.width),
+    y0: Math.min(b.y, b.y + b.height),
+    x1: Math.max(b.x, b.x + b.width),
+    y1: Math.max(b.y, b.y + b.height),
+  });
+  const media = norm(page.getMediaBox());
+  const crop  = norm(page.getCropBox());
+  const x0 = Math.max(media.x0, crop.x0), x1 = Math.min(media.x1, crop.x1);
+  const y0 = Math.max(media.y0, crop.y0), y1 = Math.min(media.y1, crop.y1);
+  // An empty intersection means the boxes disagree beyond repair; the MediaBox
+  // is the one the spec guarantees, so fall back to it rather than to nothing.
+  if (x1 <= x0 || y1 <= y0) {
+    return { x: media.x0, y: media.y0, width: media.x1 - media.x0, height: media.y1 - media.y0 };
+  }
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
 /**
  * Convert normalised display coords (0–1, y-down, relative to the page as it is
  * shown on screen) to a point in PDF user space (y-up).

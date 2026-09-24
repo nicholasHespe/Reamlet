@@ -178,6 +178,10 @@ export async function readDrawnText(bytes, pageNum = 1) {
  * the path's own bounding box stays `[0, 0, width, height]` regardless of page
  * rotation, which is what this reads back, tagged with the active fill colour.
  */
+// Every operator that paints a path's interior, stroked or not.
+const FILL_OPS = new Set(['fill', 'eoFill', 'fillStroke', 'eoFillStroke', 'closeFillStroke', 'closeEOFillStroke']
+  .map(name => pdfjs.OPS[name]));
+
 export async function readFilledRects(bytes, pageNum = 1) {
   const doc  = await loadPdfJs(bytes);
   const page = await doc.getPage(pageNum);
@@ -195,7 +199,7 @@ export async function readFilledRects(bytes, pageNum = 1) {
     } else if (op === OPS.constructPath) {
       const [minX, minY, maxX, maxY] = args[2];
       pending = { width: maxX - minX, height: maxY - minY };
-    } else if (op === OPS.fill && pending) {
+    } else if (FILL_OPS.has(op) && pending) {
       rects.push({ color: fillColor, width: pending.width, height: pending.height });
       pending = null;
     }

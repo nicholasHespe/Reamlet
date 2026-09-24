@@ -112,6 +112,7 @@ contextBridge.exposeInMainWorld('api', {
   getPrinters:            () => ipcRenderer.invoke('get-printers'),
   openPrinterPreferences: (printerName: string) => ipcRenderer.invoke('open-printer-preferences', printerName),
   executePrint: (options: {
+    pdfBytes:    ArrayBuffer;
     deviceName:  string;
     copies:      number;
     color:       boolean;
