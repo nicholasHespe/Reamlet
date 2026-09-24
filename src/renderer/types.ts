@@ -89,6 +89,8 @@ export interface Tab {
   dirty: boolean;
   tabEl: HTMLElement | null;
   loadingEl: HTMLDivElement | null;
+  /** Why the document can't be shown (its file is gone, say), or null when it can. */
+  unavailable: string | null;
   sleeping: boolean;
   lastActive: number;
 
