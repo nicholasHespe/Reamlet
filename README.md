@@ -28,6 +28,7 @@ To open PDFs directly from Chrome or Edge, install the [Reamlet browser extensio
 
 - **Multi-tab** — open multiple PDFs in one window; drag tabs to reorder or drag them into a separate window
 - **Annotations** — draw, highlight, place text, and add shapes (line, rectangle, oval, arrow); undo/redo support; hide them all with one click to see the page underneath
+- **Edit annotations after placing them** — select one (click), several (Ctrl/Shift+click, or Shift+drag a box) and change their colour, fill, thickness or, for text, size and style; drag to move them together
 - **Compact toolbar** — tools are grouped (view, document, annotations) and fold into dropdowns when the window is narrow
 - **Find** — Ctrl+F / ⌘F search across the current document or all open tabs, with exact, wildcard (`*` `?`), and fuzzy match modes
 - **Combine PDFs** — merge any open documents into a new tab in any order

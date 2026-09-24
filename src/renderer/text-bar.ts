@@ -1,9 +1,9 @@
-// Reamlet — the formatting bar that sits above a text box while it is edited:
+// Reamlet — the formatting bar that sits above text being edited or selected:
 // font size, bold, underline, text and fill colour, and delete. Whatever is
 // set here is also kept for the next new text box (see Annotator.textStyle).
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { TextEditSession, TextStyle } from './annotator.js';
+import type { TextBarTarget, TextStyle } from './annotator.js';
 import { buildSwatchPanel, markActiveSwatch, NO_FILL } from './palette.js';
 
 /** Font sizes the − / + buttons step through, in points. */
@@ -25,7 +25,7 @@ export function stepFontSize(size: number, dir: 1 | -1): number {
 
 export class TextBar {
   readonly el: HTMLDivElement;
-  private session: TextEditSession | null = null;
+  private target: TextBarTarget | null = null;
   private readonly sizeLabel: HTMLSpanElement;
   private readonly boldBtn: HTMLButtonElement;
   private readonly underlineBtn: HTMLButtonElement;
@@ -55,7 +55,7 @@ export class TextBar {
         <div class="swatch-panel hidden" data-panel="fill"></div>
       </div>
       <span class="text-bar-sep"></span>
-      <button data-act="delete" class="text-bar-delete" title="Delete text box">${TRASH_ICON}</button>
+      <button data-act="delete" class="text-bar-delete" title="Delete">${TRASH_ICON}</button>
     `;
     const q = <T extends Element>(sel: string) => this.el.querySelector(sel) as T;
     this.sizeLabel    = q('.text-bar-size');
@@ -74,19 +74,19 @@ export class TextBar {
     this.el.addEventListener('click', (e) => this.onClick(e));
   }
 
-  /** Attach the bar to the text box of `session`. */
-  show(session: TextEditSession): void {
-    this.session = session;
-    session.textarea.parentElement?.appendChild(this.el);
-    this.resizeObserver.observe(session.textarea);
-    this.closePanels();
+  /** Show the bar for `target`, replacing whatever it was showing. */
+  show(target: TextBarTarget): void {
+    this.hide();
+    this.target = target;
+    target.container.appendChild(this.el);
+    if (target.watch) this.resizeObserver.observe(target.watch);
     this.sync();
     this.place();
   }
 
   hide(): void {
-    if (this.session) this.resizeObserver.unobserve(this.session.textarea);
-    this.session = null;
+    if (this.target?.watch) this.resizeObserver.unobserve(this.target.watch);
+    this.target = null;
     this.closePanels();
     this.el.remove();
   }
@@ -101,7 +101,7 @@ export class TextBar {
       this.closePanels();
       return;
     }
-    const style = this.session?.style;
+    const style = this.target?.style;
     if (!style) return;
     switch (target.closest<HTMLElement>('[data-act]')?.dataset.act) {
       case 'smaller':   this.update({ fontSize: stepFontSize(style.fontSize, -1) }); break;
@@ -110,12 +110,12 @@ export class TextBar {
       case 'underline': this.update({ underline: !style.underline }); break;
       case 'color':     this.togglePanel(this.colorPanel); break;
       case 'fill':      this.togglePanel(this.fillPanel);  break;
-      case 'delete':    this.session?.remove(); break;
+      case 'delete':    this.target?.remove(); break;
     }
   }
 
   private update(changes: Partial<TextStyle>): void {
-    this.session?.setStyle(changes);
+    this.target?.setStyle(changes);
     this.sync();
     this.place();
   }
@@ -131,9 +131,9 @@ export class TextBar {
     this.fillPanel.classList.add('hidden');
   }
 
-  /** Show the session's current style on the controls. */
+  /** Show the target's current style on the controls. */
   private sync(): void {
-    const style = this.session?.style;
+    const style = this.target?.style;
     if (!style) return;
     this.sizeLabel.textContent = String(style.fontSize);
     this.boldBtn.classList.toggle('active', style.bold);
@@ -145,14 +145,13 @@ export class TextBar {
     markActiveSwatch(this.fillPanel, style.fillColor);
   }
 
-  /** Sit just above the text box, or below it when there is no room above. */
+  /** Sit just above the target's box, or below it when there is no room above. */
   private place(): void {
-    const ta = this.session?.textarea;
-    const wrapper = ta?.parentElement;
-    if (!ta || !wrapper) return;
-    const above = ta.offsetTop - this.el.offsetHeight - GAP;
-    const top   = above >= 0 ? above : ta.offsetTop + ta.offsetHeight + GAP;
-    const left  = Math.max(0, Math.min(ta.offsetLeft, wrapper.clientWidth - this.el.offsetWidth));
+    if (!this.target) return;
+    const box   = this.target.bounds();
+    const above = box.top - this.el.offsetHeight - GAP;
+    const top   = above >= 0 ? above : box.top + box.height + GAP;
+    const left  = Math.max(0, Math.min(box.left, this.target.container.clientWidth - this.el.offsetWidth));
     this.el.style.top  = `${top}px`;
     this.el.style.left = `${left}px`;
   }
