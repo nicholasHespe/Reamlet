@@ -3,13 +3,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 
 import { embedAnnotations } from '../out/renderer/saver.js';
 import { textBlockHeight, wrapText } from '../out/renderer/text-layout.js';
 import { displaySize } from '../out/renderer/page-box.js';
 import {
-  makePdf, fakeViewer, readAnnotations, readFilledRects,
+  makePdf, fakeViewer, readAnnotations, readFilledRects, embedBundledFont, FONT_FILES,
 } from './helpers/pdf-fixtures.mjs';
 
 const hexTo255 = (hex) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
@@ -20,7 +20,7 @@ const near    = (a, b, eps = 0.02) => Math.abs(a - b) <= eps;
 
 async function save(bytes, annotations) {
   const viewer = await fakeViewer(bytes);
-  return embedAnnotations(bytes, annotations, viewer);
+  return embedAnnotations(bytes, annotations, viewer, FONT_FILES);
 }
 
 const ROTATIONS = [0, 90, 180, 270];
@@ -133,10 +133,10 @@ test('the fill box height matches textBlockHeight exactly, for the wrapping the 
   const out = await save(src, [ann]);
   const [rect] = await readFilledRects(out, 1);
 
-  // Recomputed with the real embedded Helvetica metrics, the same way the
-  // saver wraps this text, so the expected line count isn't a guess.
+  // Recomputed with the real embedded font's metrics, the same way the saver
+  // wraps this text, so the expected line count isn't a guess.
   const doc  = await PDFDocument.load(out);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const font = await embedBundledFont(doc);
   const lines = wrapText(ann.text, ann.width * 612, (s) => font.widthOfTextAtSize(s, fontSize));
 
   assert.ok(lines.length > 1, 'fixture should actually wrap to more than one line');

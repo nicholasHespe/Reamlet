@@ -10,7 +10,12 @@
 /** Vertical gap between lines, and between a baseline and its underline. */
 export const TEXT_LINE_GAP = 2;
 
-/** Font stack whose metrics match the PDF's Helvetica (Arial is metric-compatible). */
+/**
+ * Font stack for on-screen text. Helvetica and Arial share the metrics of the
+ * Liberation Sans the saver embeds (see fonts.ts). Text is laid out without
+ * kerning on both sides, since the saved file draws glyphs at their plain
+ * advance widths.
+ */
 export const TEXT_FONT_STACK = 'Helvetica, Arial, sans-serif';
 
 /** Distance from the annotation's anchor y down to the baseline of line `lineIndex`. */
