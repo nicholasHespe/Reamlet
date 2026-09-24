@@ -263,28 +263,119 @@ button[data-toggle].active .tdrop-check::before { content: '\2713'; }
   border-top: 1px solid var(--border);
 }
 
+/* The side columns share the free space equally, keeping the centre centred,
+   but never shrink below their content: when the tools don't fit, the row
+   overflows, which is how toolbar.ts knows to fold a group away. */
 #tools-left,
 #tools-right {
   display: flex;
   align-items: center;
-  gap: 3px;
   padding: 0 10px;
-  flex: 1;
-  min-width: 0;
-  overflow: visible;
+  flex: 1 1 0;
+  min-width: max-content;
 }
 
-/* Push drawing tools rightward toward center */
+/* Push annotation tools rightward toward center */
 #tools-left  { justify-content: flex-end; }
-/* Push view/format tools leftward toward center */
+/* Push document tools leftward toward center */
 #tools-right { justify-content: flex-start; }
 
 #tools-center {
   display: flex;
   align-items: center;
-  gap: 5px;
   flex-shrink: 0;
   padding: 0 14px;
+}
+
+/* ── Tool groups ─────────────────────────────────────────────── */
+.tool-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.tool-group .group-items {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+#group-main { gap: 5px; }
+
+/* The toggle only appears once its group has folded away */
+#tools-row .tool-group .group-toggle { display: none; }
+#tools-row .tool-group.collapsed .group-toggle { display: flex; gap: 6px; }
+#tools-row .tool-group.collapsed.open .group-toggle { background: var(--border); }
+.group-label { font-size: 13px; }
+.caret { font-size: 10px; opacity: 0.7; }
+
+/* A folded group's tools open as a dropdown under its toggle */
+.tool-group.collapsed .group-items {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  width: max-content;
+  flex-wrap: wrap;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  background: var(--bar-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px var(--shadow-color);
+  z-index: 150;
+}
+.tool-group.collapsed.open .group-items { display: flex; }
+/* Each dropdown opens toward the middle of the window */
+#group-annotate.collapsed .group-items  { left: 0; }
+#group-document.collapsed .group-items  { right: 0; }
+#group-main.collapsed .group-items      { left: 50%; transform: translateX(-50%); }
+/* Separators lead nothing in a dropdown */
+.tool-group.collapsed .group-items > .sep:first-child { display: none; }
+
+/* ── Shapes menu ─────────────────────────────────────────────── */
+#btn-shapes { gap: 2px; }
+#btn-shapes.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+#shapes-icon { display: flex; }
+.menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bar-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px var(--shadow-color);
+  z-index: 200;
+}
+.menu-panel.hidden { display: none; }
+#tools-row .menu-item {
+  justify-content: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  padding: 5px 8px;
+}
+.menu-item span { flex: 1; text-align: left; }
+.menu-item kbd { font: 11px system-ui, sans-serif; opacity: 0.6; }
+
+/* ── Two-state buttons: the icon shows what a click will do ──── */
+#btn-fit .icon-fit-page                { display: none; }
+#btn-fit.fit-page .icon-fit-width      { display: none; }
+#btn-fit.fit-page .icon-fit-page       { display: block; }
+#btn-hide-annots .icon-eye-off         { display: none; }
+#btn-hide-annots.active .icon-eye      { display: none; }
+#btn-hide-annots.active .icon-eye-off  { display: block; }
+#btn-hide-annots.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 /* ── Toolbar buttons ─────────────────────────────────────────── */
@@ -318,27 +409,47 @@ button[data-toggle].active .tdrop-check::before { content: '\2713'; }
   flex-shrink: 0;
 }
 
-/* ── Bold / underline ───────────────────────────────────────── */
-#btn-bold      { font-weight: bold; min-width: 32px; }
-#btn-underline { text-decoration: underline; min-width: 32px; }
-#btn-bold.active, #btn-underline.active {
-  background: var(--accent); color: #fff; border-color: var(--accent);
-}
-
-/* ── Font size input ─────────────────────────────────────────── */
-#font-size-input {
-  width: 48px;
-  background: var(--tab-bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+/* ── Text formatting bar (above a text box being edited) ────── */
+.text-bar {
+  position: absolute;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 5px;
+  background: var(--bar-bg);
   color: var(--text);
-  font-size: 13px;
-  text-align: center;
-  padding: 3px 4px;
-  -moz-appearance: textfield;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 3px 12px var(--shadow-color);
+  font: 13px system-ui, sans-serif;
+  white-space: nowrap;
+  user-select: none;
 }
-#font-size-input::-webkit-outer-spin-button,
-#font-size-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.text-bar button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.text-bar button:hover { background: var(--border); }
+.text-bar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.text-bar .text-bar-bold      { font-weight: bold; }
+.text-bar .text-bar-underline { text-decoration: underline; }
+.text-bar .text-bar-delete:hover { color: var(--error-text); }
+.text-bar-size { min-width: 24px; text-align: center; font-variant-numeric: tabular-nums; }
+.text-bar-sep { width: 1px; height: 18px; background: var(--border); margin: 0 3px; }
+.text-bar .picker-btn { width: 26px !important; height: 26px !important; min-width: 0; }
+.text-bar .swatch { min-width: 0; width: 22px; height: 22px; padding: 0; }
 
 /* ── Colour pickers (stroke colour + fill colour) ─────────────── */
 .picker-wrap {
@@ -776,6 +887,8 @@ button[data-toggle].active .tdrop-check::before { content: '\2713'; }
   inset: 0;
   pointer-events: none;
 }
+/* Hide annotations: the unsaved overlay here, saved ones by the viewer */
+.viewer-pane.annotations-hidden .annot-canvas { visibility: hidden; }
 
 /* ── Tab whose document can't be shown (e.g. its file is gone) ── */
 .tab-unavailable {

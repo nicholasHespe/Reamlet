@@ -14,6 +14,27 @@ import { HIGHLIGHT_OPACITY } from './annotation-style.js';
 /** Width of a newly placed text box, in PDF points. */
 const TEXT_DEFAULT_WIDTH = 160;
 
+/** How a text box's text is drawn. */
+export interface TextStyle {
+  /** In points. */
+  fontSize: number;
+  bold: boolean;
+  underline: boolean;
+  color: string;
+  /** Background behind the text, or null for none. */
+  fillColor: string | null;
+}
+
+/** A text box being typed into, as the formatting bar above it sees it. */
+export interface TextEditSession {
+  readonly textarea: HTMLTextAreaElement;
+  readonly style: Readonly<TextStyle>;
+  /** Restyle the box. The change is also kept for the next new text box. */
+  setStyle(changes: Partial<TextStyle>): void;
+  /** Throw the box away, deleting the annotation if it was an existing one. */
+  remove(): void;
+}
+
 // Geometry of the editing textarea's chrome, kept here so the CSS below and the
 // measurements taken off it cannot drift apart.
 const TEXTAREA_BORDER    = 1;
@@ -29,11 +50,13 @@ export class Annotator {
   tool: string;
   color: string;
   thickness: number;
-  /** Fill colour applied to newly placed rect/oval/text annotations; null for no fill. */
+  /** Fill colour applied to newly placed rect/oval annotations; null for no fill. */
   fillColor: string | null;
-  textBold: boolean;
-  textUnderline: boolean;
-  textFontSize: number;
+  /** Style of the next new text box: whatever was last set while editing one. */
+  textStyle: TextStyle;
+  /** Called when a text box opens for typing, and when it closes. */
+  onTextEditStart?: (session: TextEditSession) => void;
+  onTextEditEnd?: () => void;
   _drawing: boolean;
   _currentPath: { pageNum: number; points: [number, number][]; color: string; thickness: number } | null;
   _shapeStart: { pageNum: number; pos: [number, number]; p: PageData } | null;
@@ -68,9 +91,7 @@ export class Annotator {
     this.color       = '#ff3333';
     this.thickness   = 3;
     this.fillColor   = null;
-    this.textBold      = false;
-    this.textUnderline = false;
-    this.textFontSize  = 14;
+    this.textStyle   = { fontSize: 14, bold: false, underline: false, color: '#111111', fillColor: null };
 
     this._drawing      = false;
     this._currentPath  = null;
@@ -115,9 +136,6 @@ export class Annotator {
   setColor(color: string)       { this.color        = color; }
   setThickness(t: number)       { this.thickness    = t; }
   setFillColor(color: string | null) { this.fillColor = color; }
-  setTextBold(b: boolean)       { this.textBold     = b; }
-  setTextUnderline(b: boolean)  { this.textUnderline = b; }
-  setTextFontSize(size: number) { this.textFontSize = Math.max(8, Math.min(96, size)); }
 
   clear() {
     this.annotations = [];
@@ -624,28 +642,21 @@ export class Annotator {
     const canvas   = p.annotCanvas;
     const wrapper  = p.wrapper;
     const w = canvas.width, h = canvas.height;
-    const fontSize = this.textFontSize;
     const scaleX   = wrapper.offsetWidth  / w;
     const scaleY   = wrapper.offsetHeight / h;
-    const weight   = this.textBold      ? 'bold'      : 'normal';
-    const decor    = this.textUnderline ? 'underline' : 'none';
+    const scale    = this.viewer?.scale ?? 1;
 
-    const scale = this.viewer?.scale ?? 1;
     this._openTextarea(wrapper, cx * scaleX, cy * scaleY, '', {
-      fontSize: fontSize * scale, weight, decor, color: this.color, fillColor: this.fillColor,
+      style:   { ...this.textStyle },
       widthPx: TEXT_DEFAULT_WIDTH * scale * scaleX,
-      onCommit: (text, widthPx) => {
+      onCommit: (text, widthPx, style) => {
         if (!text) return;
         const annot: TextAnnotation = {
           type: 'text', pageNum,
           x: cx / w, y: cy / h,
           width: widthPx / scaleX / w,
           text,
-          color:     this.color,
-          fontSize,
-          bold:      this.textBold,
-          underline: this.textUnderline,
-          fillColor: this.fillColor,
+          ...style,
         };
         this.annotations.push(annot);
         this._pushHistory();
@@ -669,15 +680,13 @@ export class Annotator {
     this._redrawPage(p, pageNum);
 
     if (ann.type !== 'text') return; // _editTextBox is only called on text annotations
-    const weight = ann.bold      ? 'bold'      : 'normal';
-    const decor  = ann.underline ? 'underline' : 'none';
+    const { fontSize, bold, underline, color, fillColor } = ann;
 
-    const scale = this.viewer?.scale ?? 1;
     this._openTextarea(wrapper, ann.x * w * scaleX, ann.y * h * scaleY, ann.text, {
-      fontSize: ann.fontSize * scale, weight, decor, color: ann.color, fillColor: ann.fillColor,
+      style:   { fontSize, bold, underline, color, fillColor },
       widthPx: ann.width * w * scaleX,
-      onCommit: (text, widthPx) => {
-        const newAnn: TextAnnotation = { ...ann, text, width: widthPx / scaleX / w };
+      onCommit: (text, widthPx, style) => {
+        const newAnn: TextAnnotation = { ...ann, ...style, text, width: widthPx / scaleX / w };
         if (text) {
           this.annotations.splice(idx, 0, newAnn);
           this._pushHistory();
@@ -689,39 +698,40 @@ export class Annotator {
         this.annotations.splice(idx, 0, ann);
         this._redrawPage(p, pageNum);
       },
+      onDelete: () => {
+        this._pushHistory();
+        this._redrawPage(p, pageNum);
+      },
     });
   }
 
   // The textarea's content box is exactly `widthPx` wide, so the browser
   // soft-wraps at the same width the annotation will. Only width is
-  // draggable; height grows to fit the text.
+  // draggable; height grows to fit the text. `left`/`top` are the anchor of
+  // the text, in the wrapper's CSS pixels.
   _openTextarea(
     wrapper: HTMLElement,
     left: number,
     top: number,
     initialText: string,
-    { fontSize, weight, decor, color, fillColor, widthPx, onCommit, onCancel }: {
-      fontSize: number; weight: string; decor: string; color: string; fillColor: string | null; widthPx: number;
-      onCommit?: (text: string, widthPx: number) => void;
+    { style, widthPx, onCommit, onCancel, onDelete }: {
+      style: TextStyle;
+      widthPx: number;
+      onCommit?: (text: string, widthPx: number, style: TextStyle) => void;
       onCancel?: () => void;
+      onDelete?: () => void;
     },
   ) {
+    const scale = this.viewer?.scale ?? 1;
     const ta = document.createElement('textarea');
     ta.value = initialText;
     ta.style.cssText = `
       position:        absolute;
       left:            ${left - TEXTAREA_INSET}px;
-      top:             ${top - fontSize / 2}px;
       box-sizing:      content-box;
-      width:           ${Math.max(widthPx, fontSize)}px;
-      background:      ${fillColor ?? 'transparent'};
+      width:           ${Math.max(widthPx, style.fontSize * scale)}px;
       border:          ${TEXTAREA_BORDER}px dashed rgba(128,128,128,0.6);
-      font:            ${weight} ${fontSize}px ${TEXT_FONT_STACK};
       font-kerning:    none;
-      color:           ${color};
-      text-decoration: ${decor};
-      line-height:     ${fontSize + TEXT_LINE_GAP}px;
-      caret-color:     ${color};
       resize:          horizontal;
       z-index:         10;
       outline:         none;
@@ -730,11 +740,23 @@ export class Annotator {
       white-space:     pre-wrap;
       word-break:      break-word;
     `;
+    // Everything the style decides; re-run whenever it changes.
+    const applyStyle = () => {
+      const fontPx = style.fontSize * scale;
+      ta.style.top            = `${top - fontPx / 2}px`;
+      ta.style.font           = `${style.bold ? 'bold' : 'normal'} ${fontPx}px ${TEXT_FONT_STACK}`;
+      ta.style.lineHeight     = `${(style.fontSize + TEXT_LINE_GAP) * scale}px`;
+      ta.style.color          = style.color;
+      ta.style.caretColor     = style.color;
+      ta.style.textDecoration = style.underline ? 'underline' : 'none';
+      ta.style.background     = style.fillColor ?? 'transparent';
+    };
     // Grow to fit the wrapped text; reset first so it can shrink too.
     const fitHeight = () => {
       ta.style.height = 'auto';
       ta.style.height = `${ta.scrollHeight}px`;
     };
+    applyStyle();
     wrapper.appendChild(ta);
     fitHeight();
     // Re-fit on width changes only — height changes are this callback's own doing.
@@ -751,31 +773,45 @@ export class Annotator {
 
     const contentWidth = () => ta.clientWidth - TEXTAREA_PADDING_X * 2;
 
-    let committed = false;
-    const finish = () => {
+    let closed = false;
+    // Take the textarea down, once; returns its final content width, or null
+    // if it was already closed.
+    const close = (): number | null => {
+      if (closed) return null;
+      closed = true;
       resizeObserver.disconnect();
       const width = contentWidth();
       ta.remove();
+      this.onTextEditEnd?.();
       return width;
     };
     const commit = () => {
-      if (committed) return;
-      committed = true;
       const text  = ta.value.trim();
-      const width = finish();
-      onCommit?.(text, width);
+      const width = close();
+      if (width !== null) onCommit?.(text, width, { ...style });
     };
     const cancel = () => {
-      if (committed) return;
-      committed = true;
-      finish();
-      onCancel?.();
+      if (close() !== null) onCancel?.();
     };
 
     ta.addEventListener('input',   fitHeight);
     ta.addEventListener('blur',    commit);
     ta.addEventListener('keydown', e => {
       if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+
+    this.onTextEditStart?.({
+      textarea: ta,
+      style,
+      setStyle: (changes) => {
+        Object.assign(style, changes);
+        Object.assign(this.textStyle, changes);
+        applyStyle();
+        fitHeight();
+      },
+      remove: () => {
+        if (close() !== null) onDelete?.();
+      },
     });
   }
 
