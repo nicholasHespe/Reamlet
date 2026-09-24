@@ -68,7 +68,12 @@ export type Annotation = DrawAnnotation | HighlightAnnotation | TextAnnotation |
 // ── Tab ───────────────────────────────────────────────────────
 
 interface FindCacheEntry {
-  items: { str: string; x: number; y: number; width: number; height: number }[];
+  /**
+   * Searchable text in PDF user space. A `whole` item is the text of a FreeText
+   * annotation: PDF.js reports that text but not where each character sits, so
+   * a match anywhere in it highlights the annotation's whole box.
+   */
+  items: { str: string; x: number; y: number; width: number; height: number; whole?: boolean }[];
 }
 
 export interface Tab {

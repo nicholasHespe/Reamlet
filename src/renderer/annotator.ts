@@ -8,6 +8,8 @@ import {
   TEXT_LINE_GAP, TEXT_FONT_STACK, textBaselineOffset, textUnderlineThickness,
   textBlockHeight, wrapText, type MeasureText,
 } from './text-layout.js';
+import { arrowGeometry, arrowHeadLength } from './arrow-geometry.js';
+import { HIGHLIGHT_OPACITY } from './annotation-style.js';
 
 /** Width of a newly placed text box, in PDF points. */
 const TEXT_DEFAULT_WIDTH = 160;
@@ -542,7 +544,7 @@ export class Annotator {
       const ctx = cvs.getContext('2d')!;
       const w = cvs.width, h = cvs.height;
       ctx.save();
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.strokeStyle = this.color;
       ctx.lineWidth   = 20;
       ctx.lineCap     = 'round';
@@ -963,18 +965,20 @@ export class Annotator {
       if (fill) ctx.fill();
       ctx.stroke();
     } else if (type === 'arrow') {
-      const headLen = Math.max(10, ctx.lineWidth * 4);
-      const angle   = Math.atan2(y2 - y1, x2 - x1);
+      // The head is sized in points (see arrow-geometry.ts); lineWidth is in
+      // canvas pixels, so convert there and back.
+      const scale = this.viewer?.scale ?? 1;
+      const { shaftEnd, head } = arrowGeometry([x1, y1], [x2, y2], arrowHeadLength(ctx.lineWidth / scale) * scale);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
+      ctx.lineTo(...shaftEnd);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = ctx.strokeStyle;
       ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
-      ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+      ctx.moveTo(...head[0]);
+      ctx.lineTo(...head[1]);
+      ctx.lineTo(...head[2]);
       ctx.closePath();
       ctx.fill();
     }
@@ -1026,7 +1030,7 @@ export class Annotator {
       ctx.stroke();
 
     } else if (annot.type === 'freeHighlight') {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.strokeStyle = annot.color;
       ctx.lineWidth   = annot.thickness * scale;
       ctx.lineCap     = 'round';
@@ -1039,7 +1043,7 @@ export class Annotator {
       ctx.stroke();
 
     } else if (annot.type === 'highlight') {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.fillStyle   = annot.color;
       annot.rects.forEach(r => {
         ctx.fillRect(r.x * w, r.y * h, r.width * w, r.height * h);

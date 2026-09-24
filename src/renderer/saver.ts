@@ -11,18 +11,27 @@ import type { Annotation, DrawAnnotation, HighlightAnnotation, TextAnnotation, S
 import type { PDFViewer } from './viewer.js';
 import type { FontFiles } from './fonts.js';
 import { toPdfCoords, displaySize, type PageBox } from './page-box.js';
+import { arrowGeometry, arrowHeadLength, type Point } from './arrow-geometry.js';
+import { HIGHLIGHT_OPACITY } from './annotation-style.js';
 import {
   TEXT_LINE_GAP, textBaselineOffset, textUnderlineThickness, textBlockHeight, wrapText,
 } from './text-layout.js';
 
 // Cast the direct-path runtime import to the pdf-lib type surface
-const { PDFDocument, PDFName, PDFArray, PDFNumber, degrees, rgb } =
-  _pdfLib as unknown as typeof PDFLibNS;
+const {
+  PDFDocument, PDFHexString, PDFString, degrees, rgb,
+  pushGraphicsState, popGraphicsState, setGraphicsState, setStrokingRgbColor, setFillingRgbColor,
+  setLineWidth, setLineCap, setLineJoin, LineCapStyle, LineJoinStyle,
+  moveTo, lineTo, appendBezierCurve, closePath, stroke, fill, fillAndStroke,
+  drawRectangle, drawText,
+} = _pdfLib as unknown as typeof PDFLibNS;
 
 type PDFDoc  = import('pdf-lib').PDFDocument;
 type PDFPage = import('pdf-lib').PDFPage;
 type PDFFont = import('pdf-lib').PDFFont;
+type PDFOperator = import('pdf-lib').PDFOperator;
 type Fontkit = Parameters<PDFDoc['registerFontkit']>[0];
+type LiteralObject = NonNullable<Parameters<PDFDoc['context']['formXObject']>[1]>;
 
 // The ES build of fontkit imports 'pako' by bare name, which Electron's file://
 // loader cannot resolve, so the self-contained UMD build is used instead. Under
@@ -72,9 +81,8 @@ export async function embedAnnotations(
     } catch { /* PDF has no AcroForm — ignore */ }
   }
 
-  // Text is drawn into the page content stream (not left to a viewer-generated
-  // annotation appearance), so the fonts must be embedded up front — only the
-  // faces some text actually uses, so documents without text are left alone.
+  // Only the faces some text actually uses are embedded, so documents without
+  // text are left alone.
   const textAnns = annotations.filter((a): a is TextAnnotation => a.type === 'text');
   const textFonts: TextFonts = {
     regular: textAnns.some(a => !a.bold) ? await embedFace(pdfDoc, fontFiles.regular) : null,
@@ -98,15 +106,9 @@ export async function embedAnnotations(
     const box      = await viewer.getPageBox(pageNum);
     const totalRot = viewer.getTotalRotation(pageNum);
 
+    const toPdf: ToPdf = (nx, ny) => toPdfCoords(nx, ny, box, totalRot);
     for (const ann of pageAnns) {
-      if      (ann.type === 'draw')          _addInkAnnotation      (pdfPage, ann,           box, totalRot);
-      else if (ann.type === 'freeHighlight') _addInkAnnotation      (pdfPage, ann,           box, totalRot);
-      else if (ann.type === 'highlight')     _addHighlightAnnotation(pdfPage, ann,           box, totalRot);
-      else if (ann.type === 'text')          _drawTextAnnotation    (pdfPage, ann,           box, totalRot, textFonts);
-      else if (ann.type === 'line')          _addLineAnnotation     (pdfPage, ann,           box, totalRot);
-      else if (ann.type === 'arrow')         _addArrowAnnotation    (pdfPage, ann,           box, totalRot);
-      else if (ann.type === 'rect')          _addSquareAnnotation   (pdfPage, ann,           box, totalRot);
-      else if (ann.type === 'oval')          _addCircleAnnotation   (pdfPage, ann,           box, totalRot);
+      _writeAnnotation(pdfPage, _annotationSpec(ann, toPdf, box, totalRot, textFonts));
     }
   }
 
@@ -145,219 +147,313 @@ function hexToRgb01(hex: string): { r: number; g: number; b: number } {
   return { r, g, b };
 }
 
-// ── Annotation writers ───────────────────────────────────────
+/** Normalised display coords → a point in PDF user space, for one page. */
+type ToPdf = (nx: number, ny: number) => Point;
 
-function _addInkAnnotation(pdfPage: PDFPage, ann: DrawAnnotation, box: PageBox, rot: number): void {
-  const { r, g, b } = hexToRgb01(ann.color);
+type Rect = [number, number, number, number];
 
-  const inkPoints = ann.points.flatMap(([nx, ny]: [number, number]) => {
-    const [x, y] = toPdfCoords(nx, ny, box, rot);
-    return [PDFNumber.of(x), PDFNumber.of(y)];
-  });
-  const inkListEntry = pdfPage.doc.context.obj(inkPoints);
-  const inkList      = pdfPage.doc.context.obj([inkListEntry]);
-
-  const pdfPts = ann.points.map(([nx, ny]: [number, number]) => toPdfCoords(nx, ny, box, rot));
-  const xs  = pdfPts.map(([x]: [number, number]) => x);
-  const ys  = pdfPts.map(([, y]: [number, number]) => y);
-  const pad = ann.thickness;
-
-  const annotDict = pdfPage.doc.context.obj({
-    Type:    PDFName.of('Annot'),
-    Subtype: PDFName.of('Ink'),
-    Rect:    [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad],
-    InkList: inkList,
-    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
-    C:       [r, g, b],
-    CA:      PDFNumber.of(ann.type === 'freeHighlight' ? 0.4 : 1),
-    F:       PDFNumber.of(4),
-  });
-
-  _appendAnnotation(pdfPage, annotDict);
+/** The axis-aligned box around `points`, grown by `pad` on every side. */
+function _bounds(points: Point[], pad = 0): Rect {
+  const xs = points.map(([x]) => x), ys = points.map(([, y]) => y);
+  return [Math.min(...xs) - pad, Math.min(...ys) - pad, Math.max(...xs) + pad, Math.max(...ys) + pad];
 }
 
-function _addHighlightAnnotation(pdfPage: PDFPage, ann: HighlightAnnotation, box: PageBox, rot: number): void {
-  const { r, g, b } = hexToRgb01(ann.color);
+/** The PDF-space box spanning two corners given in display coords. */
+function _pdfRect(toPdf: ToPdf, nx0: number, ny0: number, nx1: number, ny1: number): Rect {
+  return _bounds([toPdf(nx0, ny0), toPdf(nx1, ny1)]);
+}
 
-  for (const rect of ann.rects) {
-    // All four corners of the highlight rect in normalised coords
-    const tl = toPdfCoords(rect.x,              rect.y,               box, rot);
-    const tr = toPdfCoords(rect.x + rect.width, rect.y,               box, rot);
-    const bl = toPdfCoords(rect.x,              rect.y + rect.height, box, rot);
-    const br = toPdfCoords(rect.x + rect.width, rect.y + rect.height, box, rot);
+// ── Annotation writers ───────────────────────────────────────
+//
+// Every annotation is written as a native PDF annotation with its own
+// appearance stream, drawing exactly what the canvas overlay drew rather than
+// leaving each viewer to improvise one. Viewers paint annotations above the
+// page content in /Annots order, so writing them in the order they were placed
+// keeps the stacking the user saw on screen.
 
-    const allX = [tl[0], tr[0], bl[0], br[0]];
-    const allY = [tl[1], tr[1], bl[1], br[1]];
-    const x1 = Math.min(...allX), x2 = Math.max(...allX);
-    const y1 = Math.min(...allY), y2 = Math.max(...allY);
+/** One annotation, ready to be added to a page. */
+interface AnnotationSpec {
+  subtype: string;
+  /** [x0, y0, x1, y1] in page space. Also the appearance's BBox. */
+  rect: Rect;
+  /** Operators drawing the annotation, in page space. */
+  appearance: PDFOperator[];
+  /** Fonts and graphics states the appearance refers to. */
+  resources?: LiteralObject;
+  /** Entries specific to the subtype. */
+  entries: LiteralObject;
+}
 
-    // QuadPoints: BL, BR, TL, TR in PDF space
-    const qp = [x1, y1, x2, y1, x1, y2, x2, y2];
-
-    const annotDict = pdfPage.doc.context.obj({
-      Type:       PDFName.of('Annot'),
-      Subtype:    PDFName.of('Highlight'),
-      Rect:       [x1, y1, x2, y2],
-      QuadPoints: qp,
-      C:          [r, g, b],
-      CA:         PDFNumber.of(0.4),
-      F:          PDFNumber.of(4),
-    });
-
-    _appendAnnotation(pdfPage, annotDict);
+function _annotationSpec(ann: Annotation, toPdf: ToPdf, box: PageBox, rot: number, fonts: TextFonts): AnnotationSpec {
+  switch (ann.type) {
+    case 'draw':
+    case 'freeHighlight': return _inkSpec(ann, toPdf);
+    case 'highlight':     return _highlightSpec(ann, toPdf);
+    case 'text':          return _textSpec(ann, toPdf, box, rot, (ann.bold ? fonts.bold : fonts.regular)!);
+    case 'line':          return _lineSpec(ann, toPdf);
+    case 'arrow':         return _arrowSpec(ann, toPdf);
+    case 'rect':          return _squareSpec(ann, toPdf);
+    case 'oval':          return _circleSpec(ann, toPdf);
   }
 }
+
+/** Add the annotation, with its appearance, on top of everything already on the page. */
+function _writeAnnotation(pdfPage: PDFPage, spec: AnnotationSpec): void {
+  const context    = pdfPage.doc.context;
+  const appearance = context.register(context.formXObject(spec.appearance, {
+    // With the BBox equal to /Rect and an identity matrix, the appearance is
+    // drawn in page space exactly as written.
+    BBox:      spec.rect,
+    Resources: spec.resources ?? {},
+  }));
+  const annot = context.register(context.obj({
+    Type:    'Annot',
+    Subtype: spec.subtype,
+    Rect:    spec.rect,
+    F:       4, // Print
+    ...spec.entries,
+    AP:      { N: appearance },
+  }));
+  pdfPage.node.addAnnot(annot);
+}
+
+const OPACITY_GS = 'GS0';
+
+/** Resources for an appearance painted at `opacity`, or none when it is opaque. */
+function _opacityResources(opacity: number): LiteralObject | undefined {
+  if (opacity >= 1) return undefined;
+  return { ExtGState: { [OPACITY_GS]: { Type: 'ExtGState', CA: opacity, ca: opacity } } };
+}
+
+interface Paint {
+  stroke?: { r: number; g: number; b: number };
+  fill?: { r: number; g: number; b: number };
+  /** Stroke width; strokes get the canvas's round caps and joins. */
+  lineWidth?: number;
+  /** Needs the graphics state from _opacityResources(). */
+  opacity?: number;
+}
+
+/** Wrap path operators in the colour and stroke settings they are painted with. */
+function _painted(paint: Paint, ops: PDFOperator[]): PDFOperator[] {
+  const { stroke: sc, fill: fc, lineWidth, opacity = 1 } = paint;
+  return [
+    pushGraphicsState(),
+    ...(opacity < 1 ? [setGraphicsState(OPACITY_GS)] : []),
+    ...(sc ? [setStrokingRgbColor(sc.r, sc.g, sc.b)] : []),
+    ...(fc ? [setFillingRgbColor(fc.r, fc.g, fc.b)] : []),
+    ...(lineWidth !== undefined
+      ? [setLineWidth(lineWidth), setLineCap(LineCapStyle.Round), setLineJoin(LineJoinStyle.Round)]
+      : []),
+    ...ops,
+    popGraphicsState(),
+  ];
+}
+
+function _rectPath([x0, y0, x1, y1]: Rect): PDFOperator[] {
+  return [moveTo(x0, y0), lineTo(x1, y0), lineTo(x1, y1), lineTo(x0, y1), closePath()];
+}
+
+const _rgbArray = ({ r, g, b }: { r: number; g: number; b: number }) => [r, g, b];
+
+function _inkSpec(ann: DrawAnnotation, toPdf: ToPdf): AnnotationSpec {
+  const color   = hexToRgb01(ann.color);
+  const opacity = ann.type === 'freeHighlight' ? HIGHLIGHT_OPACITY : 1;
+  const points  = ann.points.map(([nx, ny]) => toPdf(nx, ny));
+  const [first, ...rest] = points;
+  return {
+    subtype:    'Ink',
+    rect:       _bounds(points, ann.thickness),
+    appearance: _painted({ stroke: color, lineWidth: ann.thickness, opacity }, [
+      moveTo(...first), ...rest.map(p => lineTo(...p)), stroke(),
+    ]),
+    resources:  _opacityResources(opacity),
+    entries: {
+      InkList: [points.flat()],
+      BS:      { W: ann.thickness },
+      C:       _rgbArray(color),
+      ...(opacity < 1 ? { CA: opacity } : {}),
+    },
+  };
+}
+
+function _highlightSpec(ann: HighlightAnnotation, toPdf: ToPdf): AnnotationSpec {
+  const color = hexToRgb01(ann.color);
+  // Each rect is filled on its own, as the canvas does, so overlaps darken alike.
+  const boxes = ann.rects.map(r => _pdfRect(toPdf, r.x, r.y, r.x + r.width, r.y + r.height));
+  return {
+    subtype:    'Highlight',
+    rect:       _bounds(boxes.flatMap(([x0, y0, x1, y1]): Point[] => [[x0, y0], [x1, y1]])),
+    appearance: _painted({ fill: color, opacity: HIGHLIGHT_OPACITY },
+                         boxes.flatMap(b => [..._rectPath(b), fill()])),
+    resources:  _opacityResources(HIGHLIGHT_OPACITY),
+    entries: {
+      // BL, BR, TL, TR for each highlighted span.
+      QuadPoints: boxes.flatMap(([x0, y0, x1, y1]) => [x0, y0, x1, y0, x0, y1, x1, y1]),
+      C:          _rgbArray(color),
+      CA:         HIGHLIGHT_OPACITY,
+    },
+  };
+}
+
+/** Resource name the text appearance uses for its font. */
+const TEXT_FONT_RESOURCE = 'F0';
 
 /**
- * Draw a text annotation into the page's content stream, one line at a time, at
- * exactly the baselines the canvas overlay used and wrapped to the same box
- * width (see text-layout.ts, which both sides share).
- *
- * This deliberately does not emit a FreeText annotation. A FreeText without an
- * appearance stream is laid out by whichever viewer opens the file — it gets
- * top-aligned inside its /Rect with viewer-chosen padding, wrapped to the /Rect
- * width, and rendered in the single font named by /DA. That is why saved text
- * used to land below and right of where it was placed, lost its bold and
- * underline, and wrapped once a line grew past the box. Drawing the glyphs
- * ourselves is what makes the saved file match the screen.
+ * A FreeText annotation whose appearance draws each line at exactly the
+ * baseline the canvas overlay used, wrapped to the same box width (see
+ * text-layout.ts). /Contents keeps the text for viewers that list or edit it.
  */
-function _drawTextAnnotation(pdfPage: PDFPage, ann: TextAnnotation, box: PageBox, rot: number, fonts: TextFonts): void {
+function _textSpec(ann: TextAnnotation, toPdf: ToPdf, box: PageBox, rot: number, font: PDFFont): AnnotationSpec {
   const { r, g, b } = hexToRgb01(ann.color);
-  const color = rgb(r, g, b);
-  const font  = (ann.bold ? fonts.bold : fonts.regular)!;
-  const size  = ann.fontSize;
-
+  const color   = rgb(r, g, b);
+  const size    = ann.fontSize;
   const display = displaySize(box, rot);
+  const width   = ann.width * display.width;
+  // A page displayed with /Rotate R turns its content R° clockwise, so text and
+  // its boxes are turned R° counter-clockwise to come out upright.
+  const upright = { rotate: degrees(rot), xSkew: degrees(0), ySkew: degrees(0) };
 
-  // Reflow inside the stored box width, using the embedded font's metrics.
-  const lines = wrapText(ann.text, ann.width * display.width,
-                         (s) => font.widthOfTextAtSize(s, size));
+  const lines       = wrapText(ann.text, width, (s) => font.widthOfTextAtSize(s, size));
+  const blockHeight = textBlockHeight(lines.length, size);
+  // The point on the box's left edge `down` points below its top.
+  const leftEdge = (down: number) => toPdf(ann.x, ann.y + down / display.height);
 
+  const ops: PDFOperator[] = [];
   if (ann.fillColor) {
-    const { r: fr, g: fg, b: fb } = hexToRgb01(ann.fillColor);
-    const blockHeight = textBlockHeight(lines.length, size);
-    const [fx, fy] = toPdfCoords(ann.x, ann.y + blockHeight / display.height, box, rot);
-    pdfPage.drawRectangle({
-      x: fx, y: fy,
-      width:  ann.width * display.width,
-      height: blockHeight,
-      color:  rgb(fr, fg, fb),
-      rotate: degrees(rot),
-    });
+    const fc = hexToRgb01(ann.fillColor);
+    const [x, y] = leftEdge(blockHeight);
+    ops.push(...drawRectangle({
+      x, y, width, height: blockHeight, borderWidth: 0,
+      color: rgb(fc.r, fc.g, fc.b), borderColor: undefined, ...upright,
+    }));
   }
-
   lines.forEach((line, i) => {
     if (!line) return;
-    const baselineFromTop = textBaselineOffset(size, i);
-    const [x, y] = toPdfCoords(ann.x, ann.y + baselineFromTop / display.height, box, rot);
-
-    // A page displayed with /Rotate R turns its content R° clockwise, so the
-    // text has to be turned R° counter-clockwise to come out upright.
-    pdfPage.drawText(line, { x, y, size, font, color, rotate: degrees(rot) });
+    const baseline = textBaselineOffset(size, i);
+    const [x, y] = leftEdge(baseline);
+    ops.push(...drawText(font.encodeText(line), { x, y, size, font: TEXT_FONT_RESOURCE, color, ...upright }));
 
     if (ann.underline) {
       const thickness = textUnderlineThickness(size);
-      const [ux, uy] = toPdfCoords(
-        ann.x,
-        ann.y + (baselineFromTop + TEXT_LINE_GAP + thickness) / display.height,
-        box, rot,
-      );
-      pdfPage.drawRectangle({
-        x: ux, y: uy,
-        width:  font.widthOfTextAtSize(line, size),
-        height: thickness,
-        color,
-        rotate: degrees(rot),
-      });
+      const [ux, uy] = leftEdge(baseline + TEXT_LINE_GAP + thickness);
+      ops.push(...drawRectangle({
+        x: ux, y: uy, width: font.widthOfTextAtSize(line, size), height: thickness,
+        borderWidth: 0, color, borderColor: undefined, ...upright,
+      }));
     }
   });
+
+  // The first line's ascenders rise above the box's top edge, so the /Rect is
+  // grown by half an em all round and /RD records the box inside it.
+  const pad = size / 2;
+  const [x0, y0, x1, y1] = _pdfRect(toPdf, ann.x, ann.y, ann.x + ann.width, ann.y + blockHeight / display.height);
+  return {
+    subtype:    'FreeText',
+    rect:       [x0 - pad, y0 - pad, x1 + pad, y1 + pad],
+    appearance: ops,
+    resources:  { Font: { [TEXT_FONT_RESOURCE]: font.ref } },
+    entries: {
+      Contents: PDFHexString.fromText(ann.text),
+      DA:       PDFString.of(`/Helv ${size} Tf ${r} ${g} ${b} rg`),
+      RD:       [pad, pad, pad, pad],
+      BS:       { W: 0 },
+      ...(ann.fillColor ? { C: _rgbArray(hexToRgb01(ann.fillColor)) } : {}),
+    },
+  };
 }
 
-function _addLineAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
-  const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
-  const pad = ann.thickness;
-  const annotDict = pdfPage.doc.context.obj({
-    Type:    PDFName.of('Annot'),
-    Subtype: PDFName.of('Line'),
-    Rect:    [Math.min(x1,x2)-pad, Math.min(y1,y2)-pad, Math.max(x1,x2)+pad, Math.max(y1,y2)+pad],
-    L:       [x1, y1, x2, y2],
-    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
-    C:       [r, g, b],
-    F:       PDFNumber.of(4),
-  });
-  _appendAnnotation(pdfPage, annotDict);
+function _lineSpec(ann: ShapeAnnotation, toPdf: ToPdf): AnnotationSpec {
+  const color = hexToRgb01(ann.color);
+  const start = toPdf(ann.x1, ann.y1);
+  const end   = toPdf(ann.x2, ann.y2);
+  return {
+    subtype:    'Line',
+    rect:       _bounds([start, end], ann.thickness),
+    appearance: _painted({ stroke: color, lineWidth: ann.thickness }, [
+      moveTo(...start), lineTo(...end), stroke(),
+    ]),
+    entries: {
+      L:  [...start, ...end],
+      BS: { W: ann.thickness },
+      C:  _rgbArray(color),
+    },
+  };
 }
 
-function _addArrowAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
-  const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
-  const pad = ann.thickness * 5;
-  const annotDict = pdfPage.doc.context.obj({
-    Type:    PDFName.of('Annot'),
-    Subtype: PDFName.of('Line'),
-    Rect:    [Math.min(x1,x2)-pad, Math.min(y1,y2)-pad, Math.max(x1,x2)+pad, Math.max(y1,y2)+pad],
-    L:       [x1, y1, x2, y2],
-    LE:      [PDFName.of('None'), PDFName.of('OpenArrow')],
-    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
-    C:       [r, g, b],
-    F:       PDFNumber.of(4),
-  });
-  _appendAnnotation(pdfPage, annotDict);
+/**
+ * A Line ending in a filled arrowhead, laid out by arrow-geometry.ts like the
+ * canvas's. /LE and /IC describe the same arrow for viewers that redraw it;
+ * viewers that build a Line's appearance from /L alone, PDF.js among them,
+ * would otherwise leave the head off.
+ */
+function _arrowSpec(ann: ShapeAnnotation, toPdf: ToPdf): AnnotationSpec {
+  const color = hexToRgb01(ann.color);
+  const start = toPdf(ann.x1, ann.y1);
+  const tip   = toPdf(ann.x2, ann.y2);
+  const { shaftEnd, head } = arrowGeometry(start, tip, arrowHeadLength(ann.thickness));
+  return {
+    subtype:    'Line',
+    rect:       _bounds([start, shaftEnd, ...head], ann.thickness),
+    appearance: _painted({ stroke: color, fill: color, lineWidth: ann.thickness }, [
+      moveTo(...start), lineTo(...shaftEnd), stroke(),
+      moveTo(...head[0]), lineTo(...head[1]), lineTo(...head[2]), closePath(), fill(),
+    ]),
+    entries: {
+      L:  [...start, ...tip],
+      LE: ['None', 'ClosedArrow'],
+      BS: { W: ann.thickness },
+      C:  _rgbArray(color),
+      IC: _rgbArray(color),
+    },
+  };
 }
 
-function _addSquareAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
-  const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
-  // A Square's border is drawn inside its /Rect, whereas the canvas centres the
-  // stroke on the path — grow the rect by half the stroke so both line up.
-  const pad = ann.thickness / 2;
-  const fill = ann.fillColor ? hexToRgb01(ann.fillColor) : null;
-  const annotDict = pdfPage.doc.context.obj({
-    Type:    PDFName.of('Annot'),
-    Subtype: PDFName.of('Square'),
-    Rect:    [Math.min(x1,x2) - pad, Math.min(y1,y2) - pad, Math.max(x1,x2) + pad, Math.max(y1,y2) + pad],
-    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
-    C:       [r, g, b],
-    ...(fill ? { IC: [fill.r, fill.g, fill.b] } : {}),
-    F:       PDFNumber.of(4),
-  });
-  _appendAnnotation(pdfPage, annotDict);
+function _squareSpec(ann: ShapeAnnotation, toPdf: ToPdf): AnnotationSpec {
+  return _closedShapeSpec(ann, toPdf, 'Square', _rectPath);
 }
 
-function _addCircleAnnotation(pdfPage: PDFPage, ann: ShapeAnnotation, box: PageBox, rot: number): void {
-  const { r, g, b } = hexToRgb01(ann.color);
-  const [x1, y1] = toPdfCoords(ann.x1, ann.y1, box, rot);
-  const [x2, y2] = toPdfCoords(ann.x2, ann.y2, box, rot);
-  // As with Square: the ellipse border is inset into its /Rect, so pad it out.
-  const pad = ann.thickness / 2;
-  const fill = ann.fillColor ? hexToRgb01(ann.fillColor) : null;
-  const annotDict = pdfPage.doc.context.obj({
-    Type:    PDFName.of('Annot'),
-    Subtype: PDFName.of('Circle'),
-    Rect:    [Math.min(x1,x2) - pad, Math.min(y1,y2) - pad, Math.max(x1,x2) + pad, Math.max(y1,y2) + pad],
-    BS:      pdfPage.doc.context.obj({ W: ann.thickness }),
-    C:       [r, g, b],
-    ...(fill ? { IC: [fill.r, fill.g, fill.b] } : {}),
-    F:       PDFNumber.of(4),
-  });
-  _appendAnnotation(pdfPage, annotDict);
+function _circleSpec(ann: ShapeAnnotation, toPdf: ToPdf): AnnotationSpec {
+  return _closedShapeSpec(ann, toPdf, 'Circle', _ellipsePath);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function _appendAnnotation(pdfPage: PDFPage, annotDict: any): void {
+/** Control-point distance, as a fraction of the radius, for a quarter ellipse drawn as one Bézier curve. */
+const KAPPA = 4 * (Math.SQRT2 - 1) / 3;
 
-  const ref    = pdfPage.doc.context.register(annotDict);
-  const annots = pdfPage.node.get(PDFName.of('Annots'));
-  if (annots instanceof PDFArray) {
-    annots.push(ref);
-  } else {
+/** The ellipse inscribed in `box`, as four Bézier curves. */
+function _ellipsePath([x0, y0, x1, y1]: Rect): PDFOperator[] {
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const ox = (x1 - x0) / 2 * KAPPA, oy = (y1 - y0) / 2 * KAPPA;
+  return [
+    moveTo(x0, cy),
+    appendBezierCurve(x0, cy - oy, cx - ox, y0, cx, y0),
+    appendBezierCurve(cx + ox, y0, x1, cy - oy, x1, cy),
+    appendBezierCurve(x1, cy + oy, cx + ox, y1, cx, y1),
+    appendBezierCurve(cx - ox, y1, x0, cy + oy, x0, cy),
+    closePath(),
+  ];
+}
 
-    pdfPage.node.set(PDFName.of('Annots'), pdfPage.doc.context.obj([ref]));
-  }
+/** Rectangles and ovals. Their stroke is centred on the outline, so /Rect is grown by half of it. */
+function _closedShapeSpec(
+  ann: ShapeAnnotation, toPdf: ToPdf, subtype: 'Square' | 'Circle', outline: (shape: Rect) => PDFOperator[],
+): AnnotationSpec {
+  const color = hexToRgb01(ann.color);
+  const fc    = ann.fillColor ? hexToRgb01(ann.fillColor) : undefined;
+  const shape = _pdfRect(toPdf, ann.x1, ann.y1, ann.x2, ann.y2);
+  const pad   = ann.thickness / 2;
+  return {
+    subtype,
+    rect:       [shape[0] - pad, shape[1] - pad, shape[2] + pad, shape[3] + pad],
+    appearance: _painted({ stroke: color, fill: fc, lineWidth: ann.thickness }, [
+      ...outline(shape), fc ? fillAndStroke() : stroke(),
+    ]),
+    entries: {
+      BS: { W: ann.thickness },
+      C:  _rgbArray(color),
+      ...(fc ? { IC: _rgbArray(fc) } : {}),
+    },
+  };
 }
 
 // ── Footer ───────────────────────────────────────────────────

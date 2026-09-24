@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 import { PDFDocument, PDFName, PDFDict, PDFStream } from 'pdf-lib';
 
 import { embedAnnotations, embedFooter, embedWatermark } from '../out/renderer/saver.js';
-import { makePdf, fakeViewer, readAnnotations, readDrawnText, FONT_FILES } from './helpers/pdf-fixtures.mjs';
+import {
+  makePdf, fakeViewer, readAnnotations, readDrawnText, readPaintedText, FONT_FILES,
+} from './helpers/pdf-fixtures.mjs';
 
 const GREEK_AND_MATH = 'φ = 2π·r, Δx ≤ 5 → ∑ √∞ Ω ± °';
 
@@ -36,14 +38,14 @@ async function embeddedFontPrograms(bytes) {
 
 test('Greek letters and math symbols save and read back unchanged', async () => {
   const out   = await save([textAnn(GREEK_AND_MATH)]);
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
   assert.equal(drawn.map(d => d.str).join(''), GREEK_AND_MATH);
 });
 
 test('bold text with non-Latin characters saves too', async () => {
   const text  = 'Ψ ≠ ψ — Привет';
   const out   = await save([textAnn(text, { bold: true })]);
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
   assert.equal(drawn.map(d => d.str).join(''), text);
 });
 
@@ -54,14 +56,14 @@ test('a symbol in one annotation does not stop the rest of the document saving',
       color: '#ff0000', thickness: 2, fillColor: null },
     textAnn('plain', { y: 0.8 }),
   ]);
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
   assert.deepEqual(drawn.map(d => d.str).sort(), ['plain', 'φ']);
-  assert.equal((await readAnnotations(out)).length, 1);
+  assert.deepEqual((await readAnnotations(out)).map(a => a.subtype), ['FreeText', 'Square', 'FreeText']);
 });
 
 test('a character the font has no glyph for still saves the text around it', async () => {
   const out   = await save([textAnn('before 日本 after')]);
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
   const text  = drawn.map(d => d.str).join('');
   assert.ok(text.startsWith('before') && text.endsWith('after'), `got "${text}"`);
 });
@@ -70,7 +72,7 @@ test('non-Latin text wraps to the box using the embedded font', async () => {
   const text  = 'αβγδε ζηθικ λμνξο πρστυ φχψω ΑΒΓΔΕ ΖΗΘΙΚ ΛΜΝΞΟ';
   const width = 0.25;
   const out   = await save([textAnn(text, { width })]);
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
 
   assert.ok(drawn.length > 1, `expected the text to wrap, got ${drawn.length} line(s)`);
   assert.equal(drawn.map(d => d.str).join(' '), text);

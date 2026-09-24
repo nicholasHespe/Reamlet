@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { wrapText, textBlockHeight, TEXT_LINE_GAP } from '../out/renderer/text-layout.js';
 import { embedAnnotations } from '../out/renderer/saver.js';
-import { makePdf, fakeViewer, readDrawnText, FONT_FILES } from './helpers/pdf-fixtures.mjs';
+import { makePdf, fakeViewer, readPaintedText, FONT_FILES } from './helpers/pdf-fixtures.mjs';
 
 // A monospace stand-in: every character is 10 wide, so line widths are countable.
 const mono = (s) => s.length * 10;
@@ -81,7 +81,7 @@ async function saveText(overrides) {
 
 test('a long single-line annotation is wrapped in the saved file', async () => {
   const { out } = await saveText();
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
 
   assert.ok(drawn.length > 1, `expected several lines, got ${drawn.length}`);
   assert.equal(drawn.map(d => d.str).join(' '), LONG);
@@ -89,7 +89,7 @@ test('a long single-line annotation is wrapped in the saved file', async () => {
 
 test('every saved line fits the width the box was given', async () => {
   const { out } = await saveText();
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
   const maxWidth = 0.3 * 612;
   for (const line of drawn) {
     assert.ok(line.width <= maxWidth + 0.01,
@@ -99,7 +99,7 @@ test('every saved line fits the width the box was given', async () => {
 
 test('saved lines stack down the page one line height apart', async () => {
   const { out } = await saveText();
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
   const step = 14 + TEXT_LINE_GAP;
 
   for (let i = 1; i < drawn.length; i++) {
@@ -110,8 +110,8 @@ test('saved lines stack down the page one line height apart', async () => {
 });
 
 test('narrowing the box reflows the same text into more lines', async () => {
-  const wide   = await readDrawnText((await saveText({ width: 0.6 })).out);
-  const narrow = await readDrawnText((await saveText({ width: 0.2 })).out);
+  const wide   = await readPaintedText((await saveText({ width: 0.6 })).out);
+  const narrow = await readPaintedText((await saveText({ width: 0.2 })).out);
 
   assert.ok(narrow.length > wide.length,
     `narrow box gave ${narrow.length} lines, wide gave ${wide.length}`);
@@ -128,7 +128,7 @@ test('a rotated page wraps against the width that is on screen', async () => {
     color: '#000000', fontSize: 14, bold: false, underline: false,
   };
   const out   = await embedAnnotations(src, [ann], await fakeViewer(src), FONT_FILES);
-  const drawn = await readDrawnText(out);
+  const drawn = await readPaintedText(out);
 
   assert.equal(drawn.map(d => d.str).join(' '), LONG);
   for (const line of drawn) {
