@@ -53,6 +53,17 @@ contextBridge.exposeInMainWorld('api', {
   getReuseTabSetting: () => ipcRenderer.invoke('get-reuse-tab-setting'),
   setReuseTabSetting: (enabled: boolean) => ipcRenderer.invoke('set-reuse-tab-setting', enabled),
 
+  // Tabs that outlive the app: the settings, this window's tabs as they change,
+  // and the tabs of a previous run to reopen
+  getSessionSettings: () => ipcRenderer.invoke('get-session-settings'),
+  setSessionSettings: (changes: { restoreSession?: boolean; persistentTabs?: boolean }) =>
+    ipcRenderer.invoke('set-session-settings', changes),
+  updateSession: (session: { tabs: { filePath: string; sourceUrl: string | null }[]; activeIndex: number }) =>
+    ipcRenderer.send('session-update', session),
+  onRestoreSession: (callback: (session: { tabs: { filePath: string; sourceUrl: string | null }[]; activeIndex: number }) => void) => {
+    ipcRenderer.on('restore-session', (_e: unknown, session: { tabs: { filePath: string; sourceUrl: string | null }[]; activeIndex: number }) => callback(session));
+  },
+
   // Theme (Light / Dark / System Default)
   getTheme: () => ipcRenderer.invoke('get-theme'),
   setTheme: (mode: 'light' | 'dark' | 'system') => ipcRenderer.invoke('set-theme', mode),

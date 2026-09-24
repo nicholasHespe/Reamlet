@@ -12,6 +12,12 @@ const fs    = require('fs');
 const os    = require('os');
 const https = require('https');
 
+import {
+  readSession, writeSession, toWindowSession, shouldRestore, afterUserClose,
+  referencedFiles, adoptDownload, cleanupDownloads,
+  type Session, type SessionSettings, type WindowSession,
+} from './session';
+
 // ── Window factory ─────────────────────────────────────────────
 
 const isMac = process.platform === 'darwin';
@@ -19,7 +25,11 @@ const isMac = process.platform === 'darwin';
 /** A document to open in a freshly created window, with its web origin when it came from one. */
 interface OpenTarget { filePath: string; sourceUrl: string | null }
 
-function createWindow(openTarget: OpenTarget | null, showInactive = false): BW {
+/**
+ * Open a window. `restore` is a window from a previous run whose tabs it
+ * reopens; `openTarget` opens after them, so it ends up as the active tab.
+ */
+function createWindow(openTarget: OpenTarget | null, showInactive = false, restore: WindowSession | null = null): BW {
   const win = new BrowserWindow({
     show: false,
     width: 1280,
@@ -48,6 +58,7 @@ function createWindow(openTarget: OpenTarget | null, showInactive = false): BW {
   });
 
   wireEditableContextMenu(win);
+  trackWindowSession(win, restore);
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
@@ -57,18 +68,18 @@ function createWindow(openTarget: OpenTarget | null, showInactive = false): BW {
     win.webContents.send('before-close');
   });
 
-  if (openTarget) {
-    win.webContents.once('did-finish-load', () => {
-      try {
-        const buffer = fs.readFileSync(openTarget.filePath);
-        win.webContents.send('open-file-data', {
-          filePath:  openTarget.filePath,
-          buffer:    buffer.buffer,
-          sourceUrl: openTarget.sourceUrl,
-        });
-      } catch { /* ignore */ }
-    });
-  }
+  win.webContents.once('did-finish-load', () => {
+    if (restore) win.webContents.send('restore-session', restore);
+    if (!openTarget) return;
+    try {
+      const buffer = fs.readFileSync(openTarget.filePath);
+      win.webContents.send('open-file-data', {
+        filePath:  openTarget.filePath,
+        buffer:    buffer.buffer,
+        sourceUrl: openTarget.sourceUrl,
+      });
+    } catch { /* ignore */ }
+  });
 
   return win;
 }
@@ -201,8 +212,11 @@ ipcMain.handle('focus-window', (event: IpcMainInvokeEvent) => {
   return { ok: true };
 });
 
-// Destroy window unconditionally (after renderer confirms close is OK)
+// Destroy window unconditionally (after renderer confirms close is OK). This is
+// the only way a window closes at the user's request, so it is also where the
+// session learns which tabs the user is done with.
 ipcMain.handle('force-close', (event: IpcMainInvokeEvent) => {
+  forgetUserClosedWindow(event.sender.id);
   BrowserWindow.fromWebContents(event.sender)?.destroy();
   return { ok: true };
 });
@@ -557,6 +571,101 @@ ipcMain.handle('set-reuse-tab-setting', (_event: IpcMainInvokeEvent, enabled: bo
   return { ok: true };
 });
 
+// ── Session: tabs that outlive the app ───────────────────────────
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Where downloads land: the browser extension's host and older versions put them here. */
+const DOWNLOAD_INBOX = path.join(os.tmpdir(), 'ReamletDownloads');
+
+/** Where downloaded documents live while a tab needs them; unlike the temp folder, the OS leaves it alone. */
+function downloadsDir(): string {
+  return path.join(app.getPath('userData'), 'Downloads');
+}
+
+function sessionFile(): string {
+  return path.join(app.getPath('userData'), 'session.json');
+}
+
+function sessionSettings(): SessionSettings {
+  const settings = readUserDataSettings();
+  return {
+    restoreSession: settings.restoreSession !== false,
+    persistentTabs: settings.persistentTabs === true,
+  };
+}
+
+/** Each open window's restorable tabs, keyed by webContents id, in window order. */
+const _windowSessions = new Map<number, WindowSession>();
+let _sessionWriteTimer: ReturnType<typeof setTimeout> | null = null;
+/** Set once the OS starts logging off or shutting down, which is not the user closing Reamlet. */
+let _osSessionEnding = false;
+
+function currentSession(): Session {
+  return { windows: [..._windowSessions.values()].filter(w => w.tabs.length > 0) };
+}
+
+/** Write the session file now, or remove it when neither setting wants one kept. */
+function saveSessionNow(): void {
+  if (_sessionWriteTimer) { clearTimeout(_sessionWriteTimer); _sessionWriteTimer = null; }
+  const { restoreSession, persistentTabs } = sessionSettings();
+  try {
+    if (restoreSession || persistentTabs) writeSession(sessionFile(), currentSession());
+    else fs.rmSync(sessionFile(), { force: true });
+  } catch { /* unwritable profile: carry on without a saved session */ }
+}
+
+function saveSessionSoon(): void {
+  if (_sessionWriteTimer) clearTimeout(_sessionWriteTimer);
+  _sessionWriteTimer = setTimeout(saveSessionNow, 500);
+}
+
+function trackWindowSession(win: BW, restore: WindowSession | null): void {
+  const id = win.webContents.id;
+  // Until the renderer reports its own tabs, the window holds what it is restoring.
+  _windowSessions.set(id, restore ?? { tabs: [], activeIndex: -1 });
+  // A logoff, restart or shutdown (Windows) ends the run without the user closing anything.
+  win.on('session-end', () => { _osSessionEnding = true; saveSessionNow(); });
+}
+
+function forgetUserClosedWindow(id: number): void {
+  if (_osSessionEnding) return;
+  const isLastWindow = BrowserWindow.getAllWindows().every((w: BW) => w.webContents.id === id);
+  const next = afterUserClose(_windowSessions, id, { isLastWindow, persistentTabs: sessionSettings().persistentTabs });
+  _windowSessions.clear();
+  next.forEach((ws, wid) => _windowSessions.set(wid, ws));
+  saveSessionNow();
+}
+
+ipcMain.on('session-update', (event: IpcMainEvent, value: unknown) => {
+  const ws = toWindowSession(value);
+  if (!ws) return;
+  _windowSessions.set(event.sender.id, ws);
+  saveSessionSoon();
+});
+
+ipcMain.handle('get-session-settings', () => sessionSettings());
+
+ipcMain.handle('set-session-settings', (_event: IpcMainInvokeEvent, changes: Partial<SessionSettings>) => {
+  const settings = readUserDataSettings();
+  if (typeof changes?.restoreSession === 'boolean') settings.restoreSession = changes.restoreSession;
+  if (typeof changes?.persistentTabs === 'boolean') settings.persistentTabs = changes.persistentTabs;
+  writeUserDataSettings(settings);
+  saveSessionNow(); // start or stop keeping the session file straight away
+  return sessionSettings();
+});
+
+/**
+ * Delete day-old downloads that no tab needs: not one open in a window now,
+ * nor one a saved session will reopen.
+ */
+function cleanupAllDownloads(): void {
+  const keep = referencedFiles(currentSession(), readSession(sessionFile()));
+  cleanupDownloads([DOWNLOAD_INBOX, downloadsDir()], keep, DAY_MS);
+}
+
+app.on('before-quit', () => saveSessionNow());
+
 ipcMain.handle('get-theme', () => ({
   mode:      nativeTheme.themeSource as ThemeMode,
   effective: effectiveTheme(),
@@ -598,6 +707,7 @@ app.on('open-file', (e: ElectronEvent, filePath: string) => {
     _pendingOpenFile = filePath;
     return;
   }
+  filePath = adoptDownload(filePath, DOWNLOAD_INBOX, downloadsDir());
   const wins = BrowserWindow.getAllWindows();
   if (wins.length > 0) {
     const win = wins[0];
@@ -631,39 +741,21 @@ function getArgvTarget(argv: string[]): string | null {
   return null;
 }
 
-// Delete files in %TEMP%\ReamletDownloads that are older than 24 hours.
-function _cleanupTempDownloads() {
-  const tempDir = path.join(os.tmpdir(), 'ReamletDownloads');
-  const oneDayMs = 24 * 60 * 60 * 1000;
-  try {
-    const now = Date.now();
-    for (const file of fs.readdirSync(tempDir)) {
-      const filePath = path.join(tempDir, file);
-      try {
-        if (now - fs.statSync(filePath).mtimeMs > oneDayMs) fs.unlinkSync(filePath);
-      } catch { /* file in use or already gone */ }
-    }
-  } catch { /* dir doesn't exist yet */ }
-}
-
-_cleanupTempDownloads();
-setInterval(_cleanupTempDownloads, 60 * 60 * 1000);
-
-// Download a remote PDF to %TEMP%\ReamletDownloads and return the local path.
+// Download a remote PDF into the downloads folder and return the local path.
 // Only follows HTTPS redirects (no HTTP downgrade). Rejects on HTTP errors or network failures.
-function downloadPdfToTemp(url: string, redirectsLeft = 5): Promise<string> {
+function downloadPdf(url: string, redirectsLeft = 5): Promise<string> {
   return new Promise((resolve, reject) => {
     if (redirectsLeft <= 0) { reject(new Error('Too many redirects')); return; }
     if (!url.startsWith('https://')) { reject(new Error('Only HTTPS URLs are supported')); return; }
 
-    const tempDir = path.join(os.tmpdir(), 'ReamletDownloads');
-    try { fs.mkdirSync(tempDir, { recursive: true }); } catch { /* already exists */ }
+    const dir = downloadsDir();
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { /* already exists */ }
 
     const req = https.get(url, (res: NodeJS.ReadableStream & { statusCode: number; headers: Record<string, string> }) => {
       if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 307 || res.statusCode === 308) {
         const location = res.headers['location'];
         if (location) {
-          resolve(downloadPdfToTemp(location, redirectsLeft - 1));
+          resolve(downloadPdf(location, redirectsLeft - 1));
           return;
         }
       }
@@ -682,7 +774,7 @@ function downloadPdfToTemp(url: string, redirectsLeft = 5): Promise<string> {
       // Prefix with a random token to prevent concurrent downloads of the same
       // URL from racing to write the same temp file.
       const token    = Math.random().toString(36).slice(2, 10);
-      const filePath = path.join(tempDir, `${token}-${baseName}`);
+      const filePath = path.join(dir, `${token}-${baseName}`);
       const fileStream = fs.createWriteStream(filePath);
       res.pipe(fileStream);
       fileStream.on('finish', () => {
@@ -714,7 +806,7 @@ function downloadPdfToTemp(url: string, redirectsLeft = 5): Promise<string> {
 async function resolveTarget(target: string): Promise<OpenTarget | null> {
   if (isHttpUrl(target)) {
     try {
-      const filePath = await downloadPdfToTemp(target);
+      const filePath = await downloadPdf(target);
       dialog.showMessageBox({
         type:    'info',
         title:   'Reamlet — Download complete',
@@ -727,7 +819,20 @@ async function resolveTarget(target: string): Promise<OpenTarget | null> {
       return null;
     }
   }
-  return { filePath: target, sourceUrl: null };
+  return { filePath: adoptDownload(target, DOWNLOAD_INBOX, downloadsDir()), sourceUrl: null };
+}
+
+/**
+ * Open the first window(s) of a run: one per window of the saved session when
+ * it is being restored, with `openTarget` added to the first, else one window.
+ */
+function openStartupWindows(openTarget: OpenTarget | null, showInactive: boolean): void {
+  const saved = readSession(sessionFile());
+  if (!shouldRestore(sessionSettings(), saved)) {
+    createWindow(openTarget, showInactive);
+    return;
+  }
+  saved.windows.forEach((ws, i) => createWindow(i === 0 ? openTarget : null, showInactive, ws));
 }
 
 // Single-instance lock: if another Reamlet is already running, forward the
@@ -766,11 +871,13 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     restoreExtensionIdToManifest();
     restoreThemeSource();
+    cleanupAllDownloads();
+    setInterval(cleanupAllDownloads, 60 * 60 * 1000);
     const pendingTarget = _pendingOpenFile || getArgvTarget(process.argv);
     _pendingOpenFile = null;
     const openTarget  = pendingTarget ? await resolveTarget(pendingTarget) : null;
     const background  = process.argv.includes('--background');
-    createWindow(openTarget, background);
+    openStartupWindows(openTarget, background);
     buildMenu();
   });
 
@@ -781,6 +888,6 @@ if (!gotLock) {
 
   // Mac: re-open a window when the dock icon is clicked with none open
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(null);
+    if (BrowserWindow.getAllWindows().length === 0) openStartupWindows(null, false);
   });
 }

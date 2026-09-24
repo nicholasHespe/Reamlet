@@ -6,13 +6,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { embedFooter, embedWatermark } from '../out/renderer/saver.js';
-import { makePdf, readDrawnText } from './helpers/pdf-fixtures.mjs';
+import { makePdf, readDrawnText, FONT_FILES } from './helpers/pdf-fixtures.mjs';
 
 const near = (a, b, eps = 0.5) => Math.abs(a - b) <= eps;
 
 test('a footer sits inside the visible page, not the MediaBox origin', async () => {
   const src = await makePdf({ media: [20, 30, 632, 822] });
-  const out = await embedFooter(src, { left: 'L', center: '', right: '', fontSize: 10 });
+  const out = await embedFooter(src, { left: 'L', center: '', right: '', fontSize: 10 }, FONT_FILES);
 
   const [drawn] = await readDrawnText(out);
   assert.equal(drawn.str, 'L');
@@ -22,7 +22,7 @@ test('a footer sits inside the visible page, not the MediaBox origin', async () 
 
 test('a right-aligned footer measures against the cropped width', async () => {
   const src = await makePdf({ media: [0, 0, 612, 792], crop: [50, 60, 562, 732] });
-  const out = await embedFooter(src, { left: '', center: '', right: 'R', fontSize: 10 });
+  const out = await embedFooter(src, { left: '', center: '', right: 'R', fontSize: 10 }, FONT_FILES);
 
   const [drawn] = await readDrawnText(out);
   // Right edge of the crop box, less the margin and the glyph width.
@@ -32,7 +32,7 @@ test('a right-aligned footer measures against the cropped width', async () => {
 
 test('a watermark centres on the visible page', async () => {
   const src = await makePdf({ media: [0, 0, 612, 792], crop: [50, 60, 562, 732] });
-  const out = await embedWatermark(src, { text: 'DRAFT', fontSize: 40, opacity: 0.3, angle: 0 });
+  const out = await embedWatermark(src, { text: 'DRAFT', fontSize: 40, opacity: 0.3, angle: 0 }, FONT_FILES);
 
   const [drawn] = await readDrawnText(out);
   assert.equal(drawn.str, 'DRAFT');

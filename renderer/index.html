@@ -31,6 +31,10 @@
             <button data-menu="reopen-tab">Reopen Tab <span>Ctrl+⇧+T</span></button>
             <div class="tdrop-sep"></div>
             <button data-menu="toggle-reuse-tab" data-toggle="reuse-tab"><span class="tdrop-check"></span>Switch to Already-Open Tab</button>
+            <button data-menu="toggle-restore-session" data-toggle="restore-session"
+                    title="Reopen your tabs if Reamlet closed without you closing it: a crash, power loss or system restart"><span class="tdrop-check"></span>Restore Tabs After a Crash</button>
+            <button data-menu="toggle-persistent-tabs" data-toggle="persistent-tabs"
+                    title="Reopen your tabs every time Reamlet starts, even after you close it"><span class="tdrop-check"></span>Keep Tabs Between Sessions</button>
             <div class="tdrop-sep"></div>
             <button data-menu="extension-id">Extension ID…</button>
             <div class="tdrop-sep"></div>
@@ -85,167 +89,206 @@
 
     </div>
 
-    <!-- Row 2: annotation + navigation tools -->
+    <!-- Row 2: tools, in three groups. When the window is too narrow a group
+         folds into its toggle button, which opens the group as a dropdown —
+         Document first, then Annotations, then Main (see toolbar.ts). -->
     <div id="tools-row">
 
-    <!-- LEFT: annotation tools, right-aligned toward center -->
+    <!-- LEFT: annotation tools -->
     <div id="tools-left">
-      <button id="tool-select" class="tool-btn active" title="Select / Move (Esc)" data-tool="select">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M5 3l14 9-7 1.5-3.5 6.5z"/>
-        </svg>
-      </button>
+      <div class="tool-group" id="group-annotate">
+        <button class="group-toggle" title="Annotation tools">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+          </svg>
+          <span class="group-label">Annotate</span><span class="caret">&#x25BE;</span>
+        </button>
+        <div class="group-items">
+          <button id="tool-select" class="tool-btn active" title="Select / Move (Esc)" data-tool="select">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M5 3l14 9-7 1.5-3.5 6.5z"/>
+            </svg>
+          </button>
 
-      <button id="tool-draw" class="tool-btn" title="Draw (D)" data-tool="draw">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
-        </svg>
-      </button>
+          <button id="tool-draw" class="tool-btn" title="Draw (D)" data-tool="draw">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+            </svg>
+          </button>
 
-      <button id="tool-highlight" class="tool-btn" title="Highlight (H)" data-tool="highlight">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 3h6v13l-3 3-3-3V3z"/>
-          <line x1="6" y1="21" x2="18" y2="21"/>
-        </svg>
-      </button>
+          <button id="tool-highlight" class="tool-btn" title="Highlight (H)" data-tool="highlight">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 3h6v13l-3 3-3-3V3z"/>
+              <line x1="6" y1="21" x2="18" y2="21"/>
+            </svg>
+          </button>
 
-      <button id="tool-text" class="tool-btn" title="Text box (T)" data-tool="text"
-              style="font-weight:bold;font-size:17px;">T</button>
+          <!-- Shapes: always chosen from this menu; the button shows the last one picked -->
+          <div class="picker-wrap" id="shapes-wrap">
+            <button id="btn-shapes" class="submenu-btn" title="Shapes">
+              <span id="shapes-icon"></span><span class="caret">&#x25BE;</span>
+            </button>
+            <div id="shapes-panel" class="menu-panel hidden">
+              <button id="tool-line" class="tool-btn menu-item" data-tool="line">
+                <svg width="20" height="20" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                  <line x1="5" y1="19" x2="19" y2="5"/>
+                </svg>
+                <span>Line</span><kbd>L</kbd>
+              </button>
+              <button id="tool-arrow" class="tool-btn menu-item" data-tool="arrow">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="5" y1="19" x2="19" y2="5"/>
+                  <polyline points="9 5 19 5 19 15"/>
+                </svg>
+                <span>Arrow</span><kbd>A</kbd>
+              </button>
+              <button id="tool-rect" class="tool-btn menu-item" data-tool="rect">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <rect x="3" y="5" width="18" height="14"/>
+                </svg>
+                <span>Rectangle</span><kbd>R</kbd>
+              </button>
+              <button id="tool-oval" class="tool-btn menu-item" data-tool="oval">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <ellipse cx="12" cy="12" rx="10" ry="7"/>
+                </svg>
+                <span>Ellipse</span><kbd>O</kbd>
+              </button>
+            </div>
+          </div>
 
-      <span class="sep"></span>
+          <button id="tool-text" class="tool-btn" title="Text box (T)" data-tool="text"
+                  style="font-weight:bold;font-size:17px;">T</button>
 
-      <button id="tool-line" class="tool-btn" title="Line (L)" data-tool="line">
-        <svg width="20" height="20" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <line x1="5" y1="19" x2="19" y2="5"/>
-        </svg>
-      </button>
+          <button id="tool-eraser" class="tool-btn" title="Eraser — drag to erase (E)" data-tool="eraser">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 20H7L3 16l13-13 7 7-3 3z"/>
+              <path d="M6.5 17.5l4-4"/>
+            </svg>
+          </button>
 
-      <button id="tool-rect" class="tool-btn" title="Rectangle (R)" data-tool="rect">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <rect x="3" y="5" width="18" height="14"/>
-        </svg>
-      </button>
+          <span class="sep"></span>
 
-      <button id="tool-oval" class="tool-btn" title="Oval (O)" data-tool="oval">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <ellipse cx="12" cy="12" rx="10" ry="7"/>
-        </svg>
-      </button>
+          <!-- Primary colour: strokes, lines, shape outlines, highlights -->
+          <div id="color-picker-wrap" class="picker-wrap">
+            <button id="color-btn" class="picker-btn" title="Primary colour">
+              <span id="color-dot" class="picker-dot"></span>
+            </button>
+            <div id="color-panel" class="swatch-panel hidden"></div>
+          </div>
 
-      <button id="tool-arrow" class="tool-btn" title="Arrow (A)" data-tool="arrow">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="5" y1="19" x2="19" y2="5"/>
-          <polyline points="9 5 19 5 19 15"/>
-        </svg>
-      </button>
+          <!-- Secondary colour: fill for rectangles and ellipses -->
+          <div id="fill-picker-wrap" class="picker-wrap">
+            <button id="fill-btn" class="picker-btn" title="Secondary colour (fill)">
+              <span id="fill-dot" class="picker-dot fill-none"></span>
+            </button>
+            <div id="fill-panel" class="swatch-panel hidden"></div>
+          </div>
 
-      <span class="sep"></span>
-
-      <button id="tool-eraser" class="tool-btn" title="Eraser — drag to erase (E)" data-tool="eraser">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M20 20H7L3 16l13-13 7 7-3 3z"/>
-          <path d="M6.5 17.5l4-4"/>
-        </svg>
-      </button>
-
-      <span class="sep"></span>
-
-      <button id="tool-pan" class="tool-btn" title="Pan (P)" data-tool="pan">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 11V8a2 2 0 0 0-4 0v1a2 2 0 0 0-4 0V7a2 2 0 0 0-4 0v6l-1.5-1.5a2 2 0 0 0-2.83 2.83L6 20h12v-3a4 4 0 0 0-4-4h4z"/>
-        </svg>
-      </button>
+          <input id="thickness" type="range" min="1" max="20" value="3" title="Thickness" />
+        </div>
+      </div>
     </div>
 
-    <!-- CENTER: page navigation -->
+    <!-- CENTER: page navigation (never folds) and view tools -->
     <div id="tools-center">
-      <button id="btn-prev-page" title="Previous page">&#x2039;</button>
-      <input  id="page-input" type="number" min="1" value="1" title="Jump to page" />
-      <span   id="page-total">/ 1</span>
-      <button id="btn-next-page" title="Next page">&#x203A;</button>
+      <div class="tool-group" id="group-main">
+        <button id="btn-prev-page" title="Previous page">&#x2039;</button>
+        <input  id="page-input" type="number" min="1" value="1" title="Jump to page" />
+        <span   id="page-total">/ 1</span>
+        <button id="btn-next-page" title="Next page">&#x203A;</button>
+
+        <button class="group-toggle" title="View tools">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>
+          </svg>
+        </button>
+        <div class="group-items">
+          <span class="sep"></span>
+          <button id="btn-fit" title="Fit width (Ctrl+0)">
+            <svg class="icon-fit-width" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 5v14M21 5v14M7 12h10M7 12l3-3M7 12l3 3M17 12l-3-3M17 12l-3 3"/>
+            </svg>
+            <svg class="icon-fit-page" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>
+            </svg>
+          </button>
+          <button id="btn-rotate" title="Rotate 90° clockwise — Shift+click for the current page only">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/>
+            </svg>
+          </button>
+          <button id="btn-zoom-out" title="Zoom out (Ctrl+−)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21M8 11h6"/>
+            </svg>
+          </button>
+          <button id="btn-zoom-in" title="Zoom in (Ctrl+=)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21M8 11h6M11 8v6"/>
+            </svg>
+          </button>
+          <button id="tool-pan" class="tool-btn" title="Pan (P)" data-tool="pan">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 11V8a2 2 0 0 0-4 0v1a2 2 0 0 0-4 0V7a2 2 0 0 0-4 0v6l-1.5-1.5a2 2 0 0 0-2.83 2.83L6 20h12v-3a4 4 0 0 0-4-4h4z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
 
-    <!-- RIGHT: view + text formatting + colour picker, left-aligned toward center -->
+    <!-- RIGHT: document actions -->
     <div id="tools-right">
-      <button id="btn-undo" title="Undo (Ctrl+Z)">&#x21A9;</button>
-      <button id="btn-redo" title="Redo (Ctrl+Y)">&#x21AA;</button>
-      <span class="sep"></span>
-
-      <button id="btn-fit"    title="Fit Width (Ctrl+0)">&#x21D4;</button>
-      <button id="btn-fit-h"  title="Fit Height">&#x21D5;</button>
-      <button id="btn-rotate" title="Rotate 90° CW — Shift+click for current page only">&#x21BB;</button>
-      <button id="btn-print"  title="Print (Ctrl+P)">&#x2399;</button>
-      <span class="sep"></span>
-
-      <button id="btn-bold"      title="Bold text">B</button>
-      <button id="btn-underline" title="Underline text">U</button>
-      <input  id="font-size-input" type="number" min="8" max="96" value="14" title="Font size (pt)" />
-      <span class="sep"></span>
-
-      <!-- Colour picker: single dot button → opens swatch panel -->
-      <div id="color-picker-wrap" class="picker-wrap">
-        <button id="color-btn" class="picker-btn" title="Colour">
-          <span id="color-dot" class="picker-dot"></span>
+      <div class="tool-group" id="group-document">
+        <button class="group-toggle" title="Document">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6"/>
+          </svg>
+          <span class="group-label">Document</span><span class="caret">&#x25BE;</span>
         </button>
-        <div id="color-panel" class="swatch-panel hidden">
-          <!-- Row 1: Reds / warm -->
-          <button class="swatch" data-color="#ff3333" style="background:#ff3333" title="Red"></button>
-          <button class="swatch" data-color="#ff6644" style="background:#ff6644" title="Coral"></button>
-          <button class="swatch" data-color="#ff8c00" style="background:#ff8c00" title="Orange"></button>
-          <button class="swatch" data-color="#ffb300" style="background:#ffb300" title="Amber"></button>
-          <button class="swatch" data-color="#f5c518" style="background:#f5c518" title="Yellow"></button>
-          <!-- Row 2: Greens -->
-          <button class="swatch" data-color="#aacc00" style="background:#aacc00" title="Lime"></button>
-          <button class="swatch" data-color="#33bb55" style="background:#33bb55" title="Green"></button>
-          <button class="swatch" data-color="#00cc88" style="background:#00cc88" title="Teal"></button>
-          <button class="swatch" data-color="#00bbbb" style="background:#00bbbb" title="Cyan"></button>
-          <button class="swatch" data-color="#0099cc" style="background:#0099cc" title="Sky"></button>
-          <!-- Row 3: Blues / purples -->
-          <button class="swatch" data-color="#3388ff" style="background:#3388ff" title="Blue"></button>
-          <button class="swatch" data-color="#0055cc" style="background:#0055cc" title="Dark Blue"></button>
-          <button class="swatch" data-color="#6644cc" style="background:#6644cc" title="Indigo"></button>
-          <button class="swatch" data-color="#cc44ff" style="background:#cc44ff" title="Purple"></button>
-          <button class="swatch" data-color="#ff44aa" style="background:#ff44aa" title="Pink"></button>
-          <!-- Row 4: Neutrals -->
-          <button class="swatch" data-color="#884400" style="background:#884400" title="Brown"></button>
-          <button class="swatch" data-color="#111111" style="background:#111111" title="Black"></button>
-          <button class="swatch" data-color="#555555" style="background:#555555" title="Dark Gray"></button>
-          <button class="swatch" data-color="#aaaaaa" style="background:#aaaaaa" title="Gray"></button>
-          <button class="swatch" data-color="#ffffff" style="background:#ffffff" title="White"></button>
+        <div class="group-items">
+          <button id="btn-undo" title="Undo (Ctrl+Z)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>
+            </svg>
+          </button>
+          <button id="btn-redo" title="Redo (Ctrl+Y)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>
+            </svg>
+          </button>
+          <span class="sep"></span>
+          <button id="btn-find" title="Find (Ctrl+F)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/>
+            </svg>
+          </button>
+          <button id="btn-print" title="Print (Ctrl+P)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/>
+            </svg>
+          </button>
+          <button id="btn-save" title="Save (Ctrl+S)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 3h12l4 4v14H4z"/><path d="M8 3v5h7V3"/><path d="M8 21v-7h8v7"/>
+            </svg>
+          </button>
+          <button id="btn-save-as" title="Save a copy (Ctrl+Shift+S)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 21H4V3h10l4 4v4"/><path d="M8 3v5h6"/><path d="M18 15v6M15 18h6"/>
+            </svg>
+          </button>
+          <span class="sep"></span>
+          <button id="btn-hide-annots" title="Hide annotations">
+            <svg class="icon-eye" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>
+            </svg>
+            <svg class="icon-eye-off" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 12s4-7 10-7c2 0 3.8.8 5.3 1.8M22 12s-4 7-10 7c-2 0-3.8-.8-5.3-1.8"/><path d="M3 3l18 18"/>
+            </svg>
+          </button>
         </div>
       </div>
-
-      <!-- Fill colour picker: same swatches, plus "None" — for rect/oval/text -->
-      <div id="fill-picker-wrap" class="picker-wrap">
-        <button id="fill-btn" class="picker-btn" title="Fill colour">
-          <span id="fill-dot" class="picker-dot fill-none"></span>
-        </button>
-        <div id="fill-panel" class="swatch-panel hidden">
-          <button class="swatch fill-none active" data-color="none" title="No fill"></button>
-          <button class="swatch" data-color="#ff3333" style="background:#ff3333" title="Red"></button>
-          <button class="swatch" data-color="#ff6644" style="background:#ff6644" title="Coral"></button>
-          <button class="swatch" data-color="#ff8c00" style="background:#ff8c00" title="Orange"></button>
-          <button class="swatch" data-color="#ffb300" style="background:#ffb300" title="Amber"></button>
-          <button class="swatch" data-color="#f5c518" style="background:#f5c518" title="Yellow"></button>
-          <button class="swatch" data-color="#aacc00" style="background:#aacc00" title="Lime"></button>
-          <button class="swatch" data-color="#33bb55" style="background:#33bb55" title="Green"></button>
-          <button class="swatch" data-color="#00cc88" style="background:#00cc88" title="Teal"></button>
-          <button class="swatch" data-color="#00bbbb" style="background:#00bbbb" title="Cyan"></button>
-          <button class="swatch" data-color="#0099cc" style="background:#0099cc" title="Sky"></button>
-          <button class="swatch" data-color="#3388ff" style="background:#3388ff" title="Blue"></button>
-          <button class="swatch" data-color="#0055cc" style="background:#0055cc" title="Dark Blue"></button>
-          <button class="swatch" data-color="#6644cc" style="background:#6644cc" title="Indigo"></button>
-          <button class="swatch" data-color="#cc44ff" style="background:#cc44ff" title="Purple"></button>
-          <button class="swatch" data-color="#ff44aa" style="background:#ff44aa" title="Pink"></button>
-          <button class="swatch" data-color="#884400" style="background:#884400" title="Brown"></button>
-          <button class="swatch" data-color="#111111" style="background:#111111" title="Black"></button>
-          <button class="swatch" data-color="#555555" style="background:#555555" title="Dark Gray"></button>
-          <button class="swatch" data-color="#aaaaaa" style="background:#aaaaaa" title="Gray"></button>
-          <button class="swatch" data-color="#ffffff" style="background:#ffffff" title="White"></button>
-        </div>
-      </div>
-
-      <input id="thickness" type="range" min="1" max="20" value="3" title="Thickness" />
     </div>
 
     </div><!-- /#tools-row -->
