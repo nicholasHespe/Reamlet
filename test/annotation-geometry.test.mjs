@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { embedAnnotations } from '../out/renderer/saver.js';
 import {
-  makePdf, fakeViewer, oracle, readAnnotations, readDrawnText,
+  makePdf, fakeViewer, oracle, readAnnotations, readDrawnText, FONT_FILES,
 } from './helpers/pdf-fixtures.mjs';
 
 // Page geometries under test. `box` is the region a viewer displays.
@@ -39,7 +39,7 @@ function assertPoint(actual, expected, label) {
 
 async function save(bytes, annotations, userRotations) {
   const viewer = await fakeViewer(bytes, { userRotations });
-  return embedAnnotations(bytes, annotations, viewer);
+  return embedAnnotations(bytes, annotations, viewer, FONT_FILES);
 }
 
 for (const geom of GEOMETRIES) {

@@ -2,12 +2,28 @@
 // pulling geometry back out of a saved file.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { PDFDocument, PDFName } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+
+import { FONT_FILE_NAMES } from '../../out/renderer/fonts.js';
 
 const STANDARD_FONT_DATA_URL =
   fileURLToPath(new URL('../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url));
+
+/** The bundled font files, as the app would fetch them from assets/fonts/. */
+export const FONT_FILES = Object.fromEntries(
+  Object.entries(FONT_FILE_NAMES).map(([face, name]) =>
+    [face, readFileSync(new URL(`../../assets/fonts/${name}`, import.meta.url))]),
+);
+
+/** Embed a bundled face into `doc`, for measuring text the way the saver does. */
+export async function embedBundledFont(doc, face = 'regular') {
+  doc.registerFontkit(fontkit);
+  return doc.embedFont(FONT_FILES[face], { subset: true });
+}
 
 /** Build a single-page PDF with an explicit MediaBox / CropBox / Rotate. */
 export async function makePdf({ media, crop, rotate }) {

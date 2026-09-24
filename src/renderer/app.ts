@@ -4,6 +4,7 @@
 import { PDFViewer }        from './viewer.js';
 import { Annotator }        from './annotator.js';
 import { embedAnnotations, embedFooter, embedWatermark } from './saver.js';
+import { loadFontFiles }    from './fonts.js';
 // @ts-expect-error — pdf-lib is imported via direct path for Electron's file:// ESM loader
 import * as _pdfLib       from '../../node_modules/pdf-lib/dist/pdf-lib.esm.js';
 import type * as PDFLibNS from 'pdf-lib';
@@ -1063,7 +1064,7 @@ async function saveTab(tab: Tab | null) {
     return false; // tab is still loading, not ready to save
   }
 
-  const bytes = await embedAnnotations(tab.pdfBytes, annotations, viewer);
+  const bytes = await embedAnnotations(tab.pdfBytes, annotations, viewer, await loadFontFiles());
 
   // Real on-disk file: confirm overwrite, then save.
   if (tab.filePath && /[\\/]/.test(tab.filePath)) {
@@ -1120,7 +1121,7 @@ async function saveTabCopy(tab: Tab | null) {
     return false;
   }
 
-  const bytes       = await embedAnnotations(tab.pdfBytes, annotations, viewer);
+  const bytes       = await embedAnnotations(tab.pdfBytes, annotations, viewer, await loadFontFiles());
   const defaultPath = (tab._suggestedDir && tab._suggestedName)
     ? tab._suggestedDir + '/' + tab._suggestedName
     : tab.filePath ?? undefined;
@@ -2302,7 +2303,7 @@ async function _executeFooter() {
   if (!left && !center && !right) return;
 
   const tab   = activeTab;
-  const bytes = await embedFooter(tab.pdfBytes, { left, center, right, fontSize });
+  const bytes = await embedFooter(tab.pdfBytes, { left, center, right, fontSize }, await loadFontFiles());
 
   tab.pdfBytes = bytes;
   tab.annotator!.clear();
@@ -2391,7 +2392,7 @@ async function _executeWatermark() {
   if (!text) return;
 
   const tab   = activeTab;
-  const bytes = await embedWatermark(tab.pdfBytes, { text, fontSize, opacity, angle });
+  const bytes = await embedWatermark(tab.pdfBytes, { text, fontSize, opacity, angle }, await loadFontFiles());
 
   tab.pdfBytes = bytes;
   tab.annotator!.clear();
