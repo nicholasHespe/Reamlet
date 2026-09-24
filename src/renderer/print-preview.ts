@@ -8,6 +8,8 @@ const pdfjsLib = _pdfjsLib as unknown as typeof PDFJSLib;
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   new URL('../../node_modules/pdfjs-dist/build/pdf.worker.mjs', import.meta.url).href;
 
+import { getBookletOrder, buildPrintPdf } from './print-compose.js';
+
 // ── DOM refs ──────────────────────────────────────────────────
 const previewArea    = document.getElementById('preview-area')!;
 const selPrinter     = document.getElementById('sel-printer')      as HTMLSelectElement;
@@ -81,6 +83,7 @@ interface PageData {
 const pageData: PageData[] = []; // index 0 = page 1
 const failedPages: number[] = []; // 1-based page numbers that failed to render as PNG
 let _compositeUrls: string[] = []; // blob URLs for composite renders; revoked before each rebuild
+let sourcePdfBytes: Uint8Array | null = null; // the original PDF — what's actually sent to print, via print-compose.ts
 
 // ── Printers ──────────────────────────────────────────────────
 (async () => {
@@ -128,29 +131,8 @@ function parsePageRange(str: string): Set<number> | null | false {
   return result.size > 0 ? result : false;
 }
 
-// ── Booklet ordering ──────────────────────────────────────────
-interface BookletSheet {
-  front: [number, number]; // [leftPage, rightPage] — both 1-indexed; 0 = blank
-  back:  [number, number];
-}
-
-function getBookletOrder(numPages: number): BookletSheet[] {
-  const totalSlots = Math.ceil(numPages / 4) * 4;
-  const numSheets  = totalSlots / 4;
-  const sheets: BookletSheet[] = [];
-  let low = 1, high = totalSlots;
-  for (let i = 0; i < numSheets; i++) {
-    // Per spec: front=[high, low], back=[low+1, high-1]
-    // "right page is high, left page is low" in the spec, but we render [left=high, right=low]
-    // which matches physical booklet layout (high=back_cover on left, low=front_cover on right)
-    sheets.push({ front: [high, low], back: [low + 1, high - 1] });
-    low  += 2;
-    high -= 2;
-  }
-  return sheets;
-}
-
-// ── Composite image builder ───────────────────────────────────
+// ── Composite image builder (on-screen preview only — see print-compose.ts
+//    for the vector composite that's actually sent to the printer) ────────
 // pageSlots: 1-indexed page numbers; 0 or >totalPages means blank
 // cols: number of columns in the grid
 // targetW/H: canvas output size in px
@@ -209,9 +191,9 @@ function addPreviewPage(imgEl: HTMLImageElement, paperW: number, paperH: number)
   imgEl.style.cssText = '';
   const wrapper = document.createElement('div');
   wrapper.className = 'print-page';
-  // A sheet wider than it is tall gets rotated onto portrait paper at print
-  // time — see .rotate-sheet in print-preview.css. On screen it stays as-is.
-  if (paperW > paperH) wrapper.classList.add('rotate-sheet');
+  // A sheet wider than it is tall is rotated onto portrait paper by
+  // buildPrintPdf() when actually printing (see print-compose.ts); on screen
+  // it's simply shown as laid out.
   wrapper.style.width  = `${paperW}px`;
   wrapper.style.height = `${paperH}px`;
   wrapper.appendChild(imgEl);
@@ -350,58 +332,41 @@ btnPrint.addEventListener('click', async () => {
     if (!ok) return;
   }
 
-  // Set @page to the sheet's exact physical size (in points) rather than just an
-  // orientation keyword. Chromium's print pipeline doesn't reliably derive page
-  // dimensions from 100vw/100vh (see .print-page in print-preview.css) or from a
-  // bare "size: portrait/landscape" keyword — both fall back to a default paper
-  // size that generally won't match the source PDF, which is what caused printed
-  // pages to come out at the wrong size and split across an extra blank page.
-  let pageStyle = document.getElementById('reamlet-page-orientation') as HTMLStyleElement | null;
-  if (!pageStyle) {
-    pageStyle = document.createElement('style');
-    pageStyle.id = 'reamlet-page-orientation';
-    document.head.appendChild(pageStyle);
-  }
-  // Paper is always portrait — the size printers actually stock. A landscape
-  // sheet is printed by rotating the page into that portrait box ourselves (see
-  // .rotate-sheet in print-preview.css), because Chromium drops the print
-  // option's `landscape` flag for any page carrying an @page rule, so the driver
-  // can't be relied on to rotate. Asking for a pre-rotated custom size instead
-  // (297x210mm for landscape A4) gets silently swapped for the driver's default
-  // portrait sheet, leaving a landscape layout hanging off the paper's edge.
-  const mediaWpt = Math.min(sheetWpt, sheetHpt);
-  const mediaHpt = Math.max(sheetWpt, sheetHpt);
-
-  pageStyle.textContent = `@page { size: ${mediaWpt}pt ${mediaHpt}pt; margin: 0; }`;
-  document.documentElement.style.setProperty('--print-page-w', `${mediaWpt}pt`);
-  document.documentElement.style.setProperty('--print-page-h', `${mediaHpt}pt`);
-  // The sheet as laid out, which the rotated page is sized against.
-  document.documentElement.style.setProperty('--print-sheet-w', `${sheetWpt}pt`);
-  document.documentElement.style.setProperty('--print-sheet-h', `${sheetHpt}pt`);
-
-  // Same sheet for the OS printer, in microns (1pt = 1/72in = 25400/72µm), so it
-  // doesn't fall back to its own default paper size for the actual print job.
-  const MICRONS_PER_POINT = 25400 / 72;
-  const pageSize = {
-    width:  Math.round(mediaWpt * MICRONS_PER_POINT),
-    height: Math.round(mediaHpt * MICRONS_PER_POINT),
-  };
-
-  // The on-screen preview scales #preview-area with a non-standard CSS `zoom`
-  // (see setPreviewZoom/fitToWidth). print-preview.css resets it to `zoom: normal`
-  // under @media print, but that reset isn't reliably honoured by the actual
-  // print/printToPDF compositor pass (unlike in a live DOM inspection) — so the
-  // printed page can end up laid out at the on-screen zoom factor instead of
-  // 100%, pushing content past the page boundary and spilling it onto an extra
-  // page. Clear it explicitly instead of depending on the cascade for print,
-  // and restore it afterward so the on-screen preview is unaffected.
-  const savedZoom = previewArea.style.zoom;
-  previewArea.style.zoom = '';
+  if (!sourcePdfBytes) return;
 
   btnPrint.disabled = true;
-  statusEl.textContent = 'Printing…';
+  statusEl.textContent = 'Preparing print job…';
   try {
+    // Build the actual print job from the source PDF's own vector content —
+    // not from the on-screen preview's rasterized PNGs — so fine detail
+    // (barcodes, small type) survives at the printer's resolution rather than
+    // being capped at the preview's fixed rendering DPI. Mirrors renderPreview()'s
+    // page-range/pages-per-sheet/booklet layout so print output always matches
+    // what's shown on screen; see print-compose.ts.
+    const isBooklet = chkBooklet.checked;
+    const paperW = isBooklet ? sheetWpt / 2 : sheetWpt;
+    const paperH = sheetHpt;
+    const pageRange = parsePageRange(inpPages.value);
+    const { bytes: printPdfBytes, mediaWpt, mediaHpt } = await buildPrintPdf(sourcePdfBytes, {
+      totalPages,
+      pageRange: pageRange === false ? null : pageRange,
+      pps: parseInt(selPps.value) || 1,
+      isBooklet,
+      paperW,
+      paperH,
+    });
+
+    // Same sheet for the OS printer, in microns (1pt = 1/72in = 25400/72µm), so
+    // it doesn't fall back to its own default paper size for the print job.
+    const MICRONS_PER_POINT = 25400 / 72;
+    const pageSize = {
+      width:  Math.round(mediaWpt * MICRONS_PER_POINT),
+      height: Math.round(mediaHpt * MICRONS_PER_POINT),
+    };
+
+    statusEl.textContent = 'Printing…';
     const result = await window.api.executePrint({
+      pdfBytes:   printPdfBytes.buffer.slice(printPdfBytes.byteOffset, printPdfBytes.byteOffset + printPdfBytes.byteLength) as ArrayBuffer,
       deviceName: selPrinter.value,
       pageSize,
       copies,
@@ -420,8 +385,6 @@ btnPrint.addEventListener('click', async () => {
     statusEl.textContent = `Print error: ${(err as Error).message}`;
     btnPrint.disabled = false;
     return;
-  } finally {
-    previewArea.style.zoom = savedZoom;
   }
   window.close();
 });
@@ -433,6 +396,11 @@ window.api.onPdfData(async ({ buffer }) => {
   let pdfDoc;
   try {
     const bytes = new Uint8Array(buffer);
+    // A genuine copy, not just another view: pdf.js's getDocument({ data })
+    // transfers the underlying ArrayBuffer to its worker for performance,
+    // which detaches `bytes` out from under us once loading starts — leaving
+    // sourcePdfBytes empty by print time if it aliased the same buffer.
+    sourcePdfBytes = bytes.slice();
     pdfDoc = await pdfjsLib.getDocument({ data: bytes }).promise;
   } catch (err) {
     statusEl.textContent = `Failed to load PDF: ${(err as Error).message}`;

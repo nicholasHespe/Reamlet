@@ -8,9 +8,52 @@ import {
   TEXT_LINE_GAP, TEXT_FONT_STACK, textBaselineOffset, textUnderlineThickness,
   textBlockHeight, wrapText, type MeasureText,
 } from './text-layout.js';
+import { arrowGeometry, arrowHeadLength } from './arrow-geometry.js';
+import { HIGHLIGHT_OPACITY } from './annotation-style.js';
 
 /** Width of a newly placed text box, in PDF points. */
 const TEXT_DEFAULT_WIDTH = 160;
+
+/** How a text box's text is drawn. */
+export interface TextStyle {
+  /** In points. */
+  fontSize: number;
+  bold: boolean;
+  underline: boolean;
+  color: string;
+  /** Background behind the text, or null for none. */
+  fillColor: string | null;
+}
+
+/**
+ * Text the formatting bar works on: a text box being typed into, or the text
+ * annotations among the current selection.
+ */
+export interface TextBarTarget {
+  /** Element the bar is placed in; `bounds()` is in its coordinates. */
+  readonly container: HTMLElement;
+  /** The box the bar sits against, in CSS pixels. */
+  bounds(): { left: number; top: number; width: number; height: number };
+  /** An element whose resizing moves `bounds()`, if any. */
+  readonly watch?: HTMLElement;
+  readonly style: Readonly<TextStyle>;
+  /** Restyle the text. The change is also kept for the next new text box. */
+  setStyle(changes: Partial<TextStyle>): void;
+  /** Delete the text: a box being typed is thrown away, a selection deleted. */
+  remove(): void;
+}
+
+/** A change to the look of selected annotations; thickness is in points. */
+export interface AnnotationStyleChange {
+  color?: string;
+  fillColor?: string | null;
+  thickness?: number;
+}
+
+/** Annotation types with an interior that can be filled. */
+const FILLABLE_TYPES = new Set<Annotation['type']>(['rect', 'oval', 'text']);
+/** Annotation types drawn with a stroke of adjustable thickness. */
+const STROKED_TYPES = new Set<Annotation['type']>(['draw', 'line', 'arrow', 'rect', 'oval']);
 
 // Geometry of the editing textarea's chrome, kept here so the CSS below and the
 // measurements taken off it cannot drift apart.
@@ -27,23 +70,31 @@ export class Annotator {
   tool: string;
   color: string;
   thickness: number;
-  /** Fill colour applied to newly placed rect/oval/text annotations; null for no fill. */
+  /** Fill colour applied to newly placed rect/oval annotations; null for no fill. */
   fillColor: string | null;
-  textBold: boolean;
-  textUnderline: boolean;
-  textFontSize: number;
+  /** Style of the next new text box: whatever was last set in the text bar. */
+  textStyle: TextStyle;
+  /** Called with the text the formatting bar should work on, or to hide it. */
+  onTextBarShow?: (target: TextBarTarget) => void;
+  onTextBarHide?: () => void;
+  /** Called whenever the set of selected annotations changes. */
+  onSelectionChange?: () => void;
   _drawing: boolean;
   _currentPath: { pageNum: number; points: [number, number][]; color: string; thickness: number } | null;
   _shapeStart: { pageNum: number; pos: [number, number]; p: PageData } | null;
   _freehighlight: { pageNum: number; p: PageData; points: [number, number][] } | null;
   _erasing: boolean;
   _erasedAny: boolean;
-  _selectedIdx: number | null;
-  _selectedPageNum: number | null;
-  _dragStart: { x: number; y: number } | null;
-  _dragOrigAnn: Annotation | null;
-  _dragPageRect: DOMRect | null;
-  _clipboard: Annotation | null;
+  /** The selected annotations, by identity. */
+  _selection: Set<Annotation>;
+  /** An in-progress drag of the selection: where it began, and each annotation as it was. */
+  _drag: { x: number; y: number; pageRect: DOMRect; originals: Map<Annotation, Annotation> } | null;
+  /** An in-progress Shift+drag selection box, in normalised page coords. */
+  _marquee: { pageNum: number; p: PageData; pageRect: DOMRect; from: [number, number]; to: [number, number] } | null;
+  /** Annotations cut or copied, waiting to be pasted. */
+  _clipboard: Annotation[];
+  /** The text box being typed into, while one is open. */
+  _textEdit: TextBarTarget | null;
   onCommit?: () => void;
   _handlers: Record<number, unknown>;
   _docMouseupHighlight!: (e: MouseEvent) => void;
@@ -66,9 +117,7 @@ export class Annotator {
     this.color       = '#ff3333';
     this.thickness   = 3;
     this.fillColor   = null;
-    this.textBold      = false;
-    this.textUnderline = false;
-    this.textFontSize  = 14;
+    this.textStyle   = { fontSize: 14, bold: false, underline: false, color: '#111111', fillColor: null };
 
     this._drawing      = false;
     this._currentPath  = null;
@@ -79,12 +128,11 @@ export class Annotator {
     this._erasedAny    = false;
 
     // Select / move state
-    this._selectedIdx     = null;  // index into this.annotations
-    this._selectedPageNum = null;
-    this._dragStart       = null;  // { x, y } screen pixels
-    this._dragOrigAnn     = null;  // deep copy of annotation before drag
-    this._dragPageRect    = null;  // wrapper getBoundingClientRect at drag start
-    this._clipboard       = null;  // cut annotation waiting to be pasted
+    this._selection = new Set();
+    this._drag      = null;
+    this._marquee   = null;
+    this._clipboard = [];
+    this._textEdit  = null;
     this._lastCursorPageNum = null;
     this._lastCursorNorm    = null;
 
@@ -113,9 +161,6 @@ export class Annotator {
   setColor(color: string)       { this.color        = color; }
   setThickness(t: number)       { this.thickness    = t; }
   setFillColor(color: string | null) { this.fillColor = color; }
-  setTextBold(b: boolean)       { this.textBold     = b; }
-  setTextUnderline(b: boolean)  { this.textUnderline = b; }
-  setTextFontSize(size: number) { this.textFontSize = Math.max(8, Math.min(96, size)); }
 
   clear() {
     this.annotations = [];
@@ -193,71 +238,177 @@ export class Annotator {
     this.redrawAll();
   }
 
+  // ── Selection ───────────────────────────────────────────────
+
+  /** The selected annotations, in the order they were placed. */
+  selectedAnnotations(): Annotation[] {
+    return this.annotations.filter(a => this._selection.has(a));
+  }
+
+  hasSelection(): boolean {
+    return this._selection.size > 0;
+  }
+
+  /**
+   * Restyle the selected annotations: each takes the parts of `changes` that
+   * apply to it (every type has a colour; only shapes and text have a fill;
+   * only strokes have a thickness). `commit` records an undo step; a run of
+   * uncommitted changes, such as a slider drag, ends with commitSelectedEdit().
+   */
+  updateSelected(changes: AnnotationStyleChange, commit = true) {
+    let changed = false;
+    for (const a of this._selection) {
+      if (changes.color !== undefined && a.color !== changes.color) {
+        a.color = changes.color;
+        changed = true;
+      }
+      if (changes.fillColor !== undefined && FILLABLE_TYPES.has(a.type)) {
+        const fillable = a as ShapeAnnotation | TextAnnotation;
+        if (fillable.fillColor !== changes.fillColor) { fillable.fillColor = changes.fillColor; changed = true; }
+      }
+      if (changes.thickness !== undefined && STROKED_TYPES.has(a.type)) {
+        const stroked = a as ShapeAnnotation;
+        if (stroked.thickness !== changes.thickness) { stroked.thickness = changes.thickness; changed = true; }
+      }
+    }
+    if (!changed) return;
+    this.redrawAll();
+    if (commit) this._pushHistory();
+  }
+
+  commitSelectedEdit() {
+    this._pushHistory();
+  }
+
+  _setSelection(annotations: Iterable<Annotation>) {
+    this._selection = new Set(annotations);
+    this.redrawAll();
+    this._selectionChanged();
+  }
+
+  _clearSelection(redraw = true) {
+    const had = this._selection.size > 0;
+    this._selection.clear();
+    if (had && redraw) this.redrawAll();
+    if (had) this._selectionChanged();
+  }
+
+  _selectionChanged() {
+    this.onSelectionChange?.();
+    this._refreshTextBar();
+  }
+
+  /** Show the text bar for the text box being typed, else for selected text, else hide it. */
+  _refreshTextBar() {
+    const target = this._textEdit ?? this._selectionTextTarget();
+    if (target) this.onTextBarShow?.(target);
+    else        this.onTextBarHide?.();
+  }
+
+  /** The text annotations in the selection as a formatting-bar target; null if there are none. */
+  _selectionTextTarget(): TextBarTarget | null {
+    const texts = this.selectedAnnotations().filter((a): a is TextAnnotation => a.type === 'text');
+    if (texts.length === 0) return null;
+    const first = texts[0];
+    const p = this.pages[first.pageNum - 1];
+    if (!p) return null;
+    return {
+      container: p.wrapper,
+      bounds: () => {
+        const { width: w, height: h } = p.annotCanvas;
+        const b = this._getAnnotBounds(first, w, h)!;
+        const sx = p.wrapper.offsetWidth / w, sy = p.wrapper.offsetHeight / h;
+        return { left: b.x * sx, top: b.y * sy, width: b.w * sx, height: b.h * sy };
+      },
+      style: first,
+      setStyle: (changes) => {
+        for (const t of texts) Object.assign(t, changes);
+        Object.assign(this.textStyle, changes);
+        this.redrawAll();
+        this._pushHistory();
+      },
+      remove: () => this.deleteSelected(),
+    };
+  }
+
   // ── Cut / paste ─────────────────────────────────────────────
 
   static readonly _cuttableTypes = ['text', 'rect', 'oval', 'line', 'arrow'];
 
+  /** The selected annotations that can be cut, copied and pasted. */
+  _cuttableSelection(): Annotation[] {
+    return this.selectedAnnotations().filter(a => Annotator._cuttableTypes.includes(a.type));
+  }
+
+  canCopy(): boolean {
+    return this._cuttableSelection().length > 0;
+  }
+
+  hasClipboard(): boolean {
+    return this._clipboard.length > 0;
+  }
+
   copy() {
-    if (this._selectedIdx === null) return;
-    const ann = this.annotations[this._selectedIdx];
-    if (!Annotator._cuttableTypes.includes(ann.type)) return;
-    this._clipboard = JSON.parse(JSON.stringify(ann)) as Annotation;
+    const items = this._cuttableSelection();
+    if (items.length === 0) return;
+    this._clipboard = JSON.parse(JSON.stringify(items)) as Annotation[];
   }
 
   cut() {
-    if (this._selectedIdx === null) return;
-    const ann = this.annotations[this._selectedIdx];
-    if (!Annotator._cuttableTypes.includes(ann.type)) return;
-    this._clipboard = JSON.parse(JSON.stringify(ann)) as Annotation;
-    this.annotations.splice(this._selectedIdx, 1);
-    this._selectedIdx     = null;
-    this._selectedPageNum = null;
+    const items = this._cuttableSelection();
+    if (items.length === 0) return;
+    this._clipboard = JSON.parse(JSON.stringify(items)) as Annotation[];
+    this._removeAnnotations(items);
     this._pushHistory();
-    this.redrawAll();
   }
 
+  /**
+   * Paste the clipboard at the cursor — the first item lands where a single
+   * one would (text at its anchor, a shape centred), the rest keep their
+   * places relative to it — or, with no cursor on a page, just offset. What
+   * was pasted becomes the selection.
+   */
   paste() {
-    if (!this._clipboard) return;
-    const clone = JSON.parse(JSON.stringify(this._clipboard)) as Annotation;
+    if (this._clipboard.length === 0) return;
+    const clones = JSON.parse(JSON.stringify(this._clipboard)) as Annotation[];
+    let dx = 0.03, dy = 0.03;
     if (this._lastCursorPageNum !== null && this._lastCursorNorm !== null) {
       const [cx, cy] = this._lastCursorNorm;
-      clone.pageNum = this._lastCursorPageNum;
-      if (clone.type === 'text') {
-        clone.x = cx;
-        clone.y = cy;
-      } else {
-        const sc = clone as ShapeAnnotation;
-        const halfW = (sc.x2 - sc.x1) / 2;
-        const halfH = (sc.y2 - sc.y1) / 2;
-        sc.x1 = cx - halfW;
-        sc.y1 = cy - halfH;
-        sc.x2 = cx + halfW;
-        sc.y2 = cy + halfH;
-      }
-    } else {
-      const off = 0.03;
-      if (clone.type === 'text') {
-        clone.x += off;
-        clone.y += off;
-      } else {
-        (clone as ShapeAnnotation).x1 += off;
-        (clone as ShapeAnnotation).y1 += off;
-        (clone as ShapeAnnotation).x2 += off;
-        (clone as ShapeAnnotation).y2 += off;
-      }
+      const [ax, ay] = Annotator._pasteAnchor(clones[0]);
+      dx = cx - ax;
+      dy = cy - ay;
+      for (const c of clones) c.pageNum = this._lastCursorPageNum;
     }
-    this.annotations.push(clone);
+    for (const c of clones) this._moveAnnotation(c, dx, dy);
+    this.annotations.push(...clones);
     this._pushHistory();
-    this.redrawAll();
+    this._setSelection(clones);
+  }
+
+  /** The point of an annotation that pasting puts at the cursor. */
+  static _pasteAnchor(ann: Annotation): [number, number] {
+    if (ann.type === 'text') return [ann.x, ann.y];
+    const s = ann as ShapeAnnotation;
+    return [(s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2];
   }
 
   deleteSelected() {
-    if (this._selectedIdx === null) return;
-    this.annotations.splice(this._selectedIdx, 1);
-    this._selectedIdx     = null;
-    this._selectedPageNum = null;
+    const items = this.selectedAnnotations();
+    if (items.length === 0) return;
+    this._removeAnnotations(items);
     this._pushHistory();
+  }
+
+  /** Take annotations out of the document (and the selection), and redraw. */
+  _removeAnnotations(items: Annotation[]) {
+    const gone = new Set(items);
+    for (let i = this.annotations.length - 1; i >= 0; i--) {
+      if (gone.has(this.annotations[i])) this.annotations.splice(i, 1);
+    }
+    const hadSelection = items.some(a => this._selection.has(a));
+    for (const a of items) this._selection.delete(a);
     this.redrawAll();
+    if (hadSelection) this._selectionChanged();
   }
 
   // ── Private: event wiring ──────────────────────────────────
@@ -295,25 +446,41 @@ export class Annotator {
     };
     document.addEventListener('mouseup', this._docMouseupHighlight);
 
-    // Document-level mousemove / mouseup for annotation dragging (select tool)
+    // Document-level mousemove / mouseup for dragging the selection, and for
+    // the Shift+drag selection box (select tool)
     this._docMousemoveDrag = (e) => {
-      if (!this._dragStart || this._selectedIdx === null) return;
-      const rect = this._dragPageRect!;
-      const totalDx = (e.clientX - this._dragStart.x) / rect.width;
-      const totalDy = (e.clientY - this._dragStart.y) / rect.height;
-      // Restore original then apply accumulated delta
-      const restored = JSON.parse(JSON.stringify(this._dragOrigAnn));
-      this._moveAnnotation(restored, totalDx, totalDy);
-      this.annotations[this._selectedIdx] = restored;
+      if (this._marquee) {
+        const m = this._marquee;
+        m.to = [(e.clientX - m.pageRect.left) / m.pageRect.width, (e.clientY - m.pageRect.top) / m.pageRect.height];
+        this._redrawPage(m.p, m.pageNum);
+        return;
+      }
+      if (!this._drag) return;
+      const { pageRect } = this._drag;
+      const dx = (e.clientX - this._drag.x) / pageRect.width;
+      const dy = (e.clientY - this._drag.y) / pageRect.height;
+      // Each annotation moves from where it was when the drag began; moving in
+      // place keeps it the same object, so it stays selected.
+      for (const [ann, orig] of this._drag.originals) {
+        const moved = JSON.parse(JSON.stringify(orig)) as Annotation;
+        this._moveAnnotation(moved, dx, dy);
+        Object.assign(ann, moved);
+      }
       this.redrawAll();
     };
     document.addEventListener('mousemove', this._docMousemoveDrag);
 
     this._docMouseupDrag = (e) => {
-      if (!this._dragStart) return;
-      const moved = Math.hypot(e.clientX - this._dragStart.x, e.clientY - this._dragStart.y) > 3;
+      if (this._marquee) {
+        this._finishMarquee();
+        this._endDrag();
+        return;
+      }
+      if (!this._drag) return;
+      const moved = Math.hypot(e.clientX - this._drag.x, e.clientY - this._drag.y) > 3;
       this._endDrag();
       if (moved) this._pushHistory();
+      this._refreshTextBar();
     };
     document.addEventListener('mouseup', this._docMouseupDrag);
 
@@ -326,10 +493,25 @@ export class Annotator {
 
   // Clear drag state and give the document its text selection back.
   _endDrag() {
-    this._dragStart    = null;
-    this._dragOrigAnn  = null;
-    this._dragPageRect = null;
+    this._drag    = null;
+    this._marquee = null;
     document.body.style.userSelect = '';
+  }
+
+  // Add everything the selection box touches to the selection.
+  _finishMarquee() {
+    const m = this._marquee!;
+    const x0 = Math.min(m.from[0], m.to[0]), x1 = Math.max(m.from[0], m.to[0]);
+    const y0 = Math.min(m.from[1], m.to[1]), y1 = Math.max(m.from[1], m.to[1]);
+    const { width: w, height: h } = m.p.annotCanvas;
+    const touched = this.annotations.filter(a => {
+      if (a.pageNum !== m.pageNum) return false;
+      const b = this._getAnnotBounds(a, w, h);
+      if (!b) return false;
+      return b.x / w <= x1 && (b.x + b.w) / w >= x0 && b.y / h <= y1 && (b.y + b.h) / h >= y0;
+    });
+    this._marquee = null;
+    this._setSelection([...this._selection, ...touched]);
   }
 
   // Remove all document-level listeners. Call when the tab is closed.
@@ -485,8 +667,9 @@ export class Annotator {
     // Freehand highlight: starts on mousedown on non-text areas
     const onWrapperDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
-      // Let form field inputs (checkboxes, text, select) handle their own events.
-      if ((e.target as Element)?.closest('[data-field-name]')) return;
+      // Let form field inputs (checkboxes, text, select) handle their own
+      // events, and the text bar and a text box being typed in theirs.
+      if ((e.target as Element)?.closest('[data-field-name], .text-bar, textarea')) return;
 
       if (this.tool === 'highlight') {
         if (!(e.target as Element)?.closest('.textLayer span')) {
@@ -504,22 +687,45 @@ export class Annotator {
         const nx = (e.clientX - rect.left) / rect.width;
         const ny = (e.clientY - rect.top)  / rect.height;
         const idx = this._hitTest(pageNum, nx, ny);
-        if (idx >= 0) {
-          // Starting a drag, not a text selection.
-          e.preventDefault();
-          e.stopPropagation();
-          window.getSelection()?.removeAllRanges();
-          document.body.style.userSelect = 'none';
-
-          this._selectedIdx     = idx;
-          this._selectedPageNum = pageNum;
-          this._dragStart    = { x: e.clientX, y: e.clientY };
-          this._dragOrigAnn  = JSON.parse(JSON.stringify(this.annotations[idx]));
-          this._dragPageRect = rect;
-          this.redrawAll();
-        } else {
-          this._clearSelection();
+        // Ctrl/Shift+click adds or removes; Shift+drag on empty page draws a
+        // selection box; a plain drag on empty page still selects page text.
+        const additive = e.ctrlKey || e.metaKey || e.shiftKey;
+        if (idx < 0) {
+          if (e.shiftKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.getSelection()?.removeAllRanges();
+            document.body.style.userSelect = 'none';
+            this._marquee = { pageNum, p, pageRect: rect, from: [nx, ny], to: [nx, ny] };
+          } else if (!additive) {
+            this._clearSelection();
+          }
+          return;
         }
+
+        // Starting a drag (or a selection change), not a text selection.
+        e.preventDefault();
+        e.stopPropagation();
+        window.getSelection()?.removeAllRanges();
+
+        const ann = this.annotations[idx];
+        const selection = new Set(this._selection);
+        if (additive) {
+          if (selection.has(ann)) selection.delete(ann);
+          else                    selection.add(ann);
+        } else if (!selection.has(ann)) {
+          selection.clear();
+          selection.add(ann);
+        }
+        this._setSelection(selection);
+        if (!selection.has(ann)) return; // just deselected: nothing to drag
+
+        document.body.style.userSelect = 'none';
+        this.onTextBarHide?.(); // back once the drag ends
+        this._drag = {
+          x: e.clientX, y: e.clientY, pageRect: rect,
+          originals: new Map([...selection].map(a => [a, JSON.parse(JSON.stringify(a)) as Annotation])),
+        };
       }
     };
 
@@ -542,7 +748,7 @@ export class Annotator {
       const ctx = cvs.getContext('2d')!;
       const w = cvs.width, h = cvs.height;
       ctx.save();
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.strokeStyle = this.color;
       ctx.lineWidth   = 20;
       ctx.lineCap     = 'round';
@@ -622,28 +828,21 @@ export class Annotator {
     const canvas   = p.annotCanvas;
     const wrapper  = p.wrapper;
     const w = canvas.width, h = canvas.height;
-    const fontSize = this.textFontSize;
     const scaleX   = wrapper.offsetWidth  / w;
     const scaleY   = wrapper.offsetHeight / h;
-    const weight   = this.textBold      ? 'bold'      : 'normal';
-    const decor    = this.textUnderline ? 'underline' : 'none';
+    const scale    = this.viewer?.scale ?? 1;
 
-    const scale = this.viewer?.scale ?? 1;
     this._openTextarea(wrapper, cx * scaleX, cy * scaleY, '', {
-      fontSize: fontSize * scale, weight, decor, color: this.color, fillColor: this.fillColor,
+      style:   { ...this.textStyle },
       widthPx: TEXT_DEFAULT_WIDTH * scale * scaleX,
-      onCommit: (text, widthPx) => {
+      onCommit: (text, widthPx, style) => {
         if (!text) return;
         const annot: TextAnnotation = {
           type: 'text', pageNum,
           x: cx / w, y: cy / h,
           width: widthPx / scaleX / w,
           text,
-          color:     this.color,
-          fontSize,
-          bold:      this.textBold,
-          underline: this.textUnderline,
-          fillColor: this.fillColor,
+          ...style,
         };
         this.annotations.push(annot);
         this._pushHistory();
@@ -662,20 +861,18 @@ export class Annotator {
     const scaleY = wrapper.offsetHeight / h;
 
     // Temporarily remove annotation so the canvas area is clear
+    this._clearSelection(false);
     this.annotations.splice(idx, 1);
-    this._selectedIdx = null;
     this._redrawPage(p, pageNum);
 
     if (ann.type !== 'text') return; // _editTextBox is only called on text annotations
-    const weight = ann.bold      ? 'bold'      : 'normal';
-    const decor  = ann.underline ? 'underline' : 'none';
+    const { fontSize, bold, underline, color, fillColor } = ann;
 
-    const scale = this.viewer?.scale ?? 1;
     this._openTextarea(wrapper, ann.x * w * scaleX, ann.y * h * scaleY, ann.text, {
-      fontSize: ann.fontSize * scale, weight, decor, color: ann.color, fillColor: ann.fillColor,
+      style:   { fontSize, bold, underline, color, fillColor },
       widthPx: ann.width * w * scaleX,
-      onCommit: (text, widthPx) => {
-        const newAnn: TextAnnotation = { ...ann, text, width: widthPx / scaleX / w };
+      onCommit: (text, widthPx, style) => {
+        const newAnn: TextAnnotation = { ...ann, ...style, text, width: widthPx / scaleX / w };
         if (text) {
           this.annotations.splice(idx, 0, newAnn);
           this._pushHistory();
@@ -687,38 +884,40 @@ export class Annotator {
         this.annotations.splice(idx, 0, ann);
         this._redrawPage(p, pageNum);
       },
+      onDelete: () => {
+        this._pushHistory();
+        this._redrawPage(p, pageNum);
+      },
     });
   }
 
   // The textarea's content box is exactly `widthPx` wide, so the browser
   // soft-wraps at the same width the annotation will. Only width is
-  // draggable; height grows to fit the text.
+  // draggable; height grows to fit the text. `left`/`top` are the anchor of
+  // the text, in the wrapper's CSS pixels.
   _openTextarea(
     wrapper: HTMLElement,
     left: number,
     top: number,
     initialText: string,
-    { fontSize, weight, decor, color, fillColor, widthPx, onCommit, onCancel }: {
-      fontSize: number; weight: string; decor: string; color: string; fillColor: string | null; widthPx: number;
-      onCommit?: (text: string, widthPx: number) => void;
+    { style, widthPx, onCommit, onCancel, onDelete }: {
+      style: TextStyle;
+      widthPx: number;
+      onCommit?: (text: string, widthPx: number, style: TextStyle) => void;
       onCancel?: () => void;
+      onDelete?: () => void;
     },
   ) {
+    const scale = this.viewer?.scale ?? 1;
     const ta = document.createElement('textarea');
     ta.value = initialText;
     ta.style.cssText = `
       position:        absolute;
       left:            ${left - TEXTAREA_INSET}px;
-      top:             ${top - fontSize / 2}px;
       box-sizing:      content-box;
-      width:           ${Math.max(widthPx, fontSize)}px;
-      background:      ${fillColor ?? 'transparent'};
+      width:           ${Math.max(widthPx, style.fontSize * scale)}px;
       border:          ${TEXTAREA_BORDER}px dashed rgba(128,128,128,0.6);
-      font:            ${weight} ${fontSize}px ${TEXT_FONT_STACK};
-      color:           ${color};
-      text-decoration: ${decor};
-      line-height:     ${fontSize + TEXT_LINE_GAP}px;
-      caret-color:     ${color};
+      font-kerning:    none;
       resize:          horizontal;
       z-index:         10;
       outline:         none;
@@ -727,11 +926,23 @@ export class Annotator {
       white-space:     pre-wrap;
       word-break:      break-word;
     `;
+    // Everything the style decides; re-run whenever it changes.
+    const applyStyle = () => {
+      const fontPx = style.fontSize * scale;
+      ta.style.top            = `${top - fontPx / 2}px`;
+      ta.style.font           = `${style.bold ? 'bold' : 'normal'} ${fontPx}px ${TEXT_FONT_STACK}`;
+      ta.style.lineHeight     = `${(style.fontSize + TEXT_LINE_GAP) * scale}px`;
+      ta.style.color          = style.color;
+      ta.style.caretColor     = style.color;
+      ta.style.textDecoration = style.underline ? 'underline' : 'none';
+      ta.style.background     = style.fillColor ?? 'transparent';
+    };
     // Grow to fit the wrapped text; reset first so it can shrink too.
     const fitHeight = () => {
       ta.style.height = 'auto';
       ta.style.height = `${ta.scrollHeight}px`;
     };
+    applyStyle();
     wrapper.appendChild(ta);
     fitHeight();
     // Re-fit on width changes only — height changes are this callback's own doing.
@@ -748,25 +959,26 @@ export class Annotator {
 
     const contentWidth = () => ta.clientWidth - TEXTAREA_PADDING_X * 2;
 
-    let committed = false;
-    const finish = () => {
+    let closed = false;
+    // Take the textarea down, once; returns its final content width, or null
+    // if it was already closed.
+    const close = (): number | null => {
+      if (closed) return null;
+      closed = true;
       resizeObserver.disconnect();
       const width = contentWidth();
       ta.remove();
+      this._textEdit = null;
+      this._refreshTextBar();
       return width;
     };
     const commit = () => {
-      if (committed) return;
-      committed = true;
       const text  = ta.value.trim();
-      const width = finish();
-      onCommit?.(text, width);
+      const width = close();
+      if (width !== null) onCommit?.(text, width, { ...style });
     };
     const cancel = () => {
-      if (committed) return;
-      committed = true;
-      finish();
-      onCancel?.();
+      if (close() !== null) onCancel?.();
     };
 
     ta.addEventListener('input',   fitHeight);
@@ -774,6 +986,23 @@ export class Annotator {
     ta.addEventListener('keydown', e => {
       if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     });
+
+    this._textEdit = {
+      container: wrapper,
+      bounds: () => ({ left: ta.offsetLeft, top: ta.offsetTop, width: ta.offsetWidth, height: ta.offsetHeight }),
+      watch: ta,
+      style,
+      setStyle: (changes) => {
+        Object.assign(style, changes);
+        Object.assign(this.textStyle, changes);
+        applyStyle();
+        fitHeight();
+      },
+      remove: () => {
+        if (close() !== null) onDelete?.();
+      },
+    };
+    this._refreshTextBar();
   }
 
   // ── Text measurement ────────────────────────────────────────
@@ -785,6 +1014,7 @@ export class Annotator {
     this._measureCanvas ??= document.createElement('canvas');
     const ctx = this._measureCanvas.getContext('2d')!;
     ctx.font = `${bold ? 'bold ' : ''}${fontPx}px ${TEXT_FONT_STACK}`;
+    ctx.fontKerning = 'none';
     return (text: string) => ctx.measureText(text).width;
   }
 
@@ -860,20 +1090,12 @@ export class Annotator {
     const w = canvas.width, h = canvas.height;
     const idx = this._hitTest(pageNum, cx / w, cy / h);
     if (idx >= 0) {
-      this.annotations.splice(idx, 1);
+      this._removeAnnotations([this.annotations[idx]]);
       this._erasedAny = true;
-      this._redrawPage(p, pageNum);
     }
   }
 
   // ── Select / move ────────────────────────────────────────────
-
-  _clearSelection(redraw = true) {
-    const had = this._selectedIdx !== null;
-    this._selectedIdx     = null;
-    this._selectedPageNum = null;
-    if (had && redraw) this.redrawAll();
-  }
 
   _moveAnnotation(ann: Annotation, dx: number, dy: number) {
     if (ann.type === 'draw' || ann.type === 'freeHighlight') {
@@ -961,18 +1183,20 @@ export class Annotator {
       if (fill) ctx.fill();
       ctx.stroke();
     } else if (type === 'arrow') {
-      const headLen = Math.max(10, ctx.lineWidth * 4);
-      const angle   = Math.atan2(y2 - y1, x2 - x1);
+      // The head is sized in points (see arrow-geometry.ts); lineWidth is in
+      // canvas pixels, so convert there and back.
+      const scale = this.viewer?.scale ?? 1;
+      const { shaftEnd, head } = arrowGeometry([x1, y1], [x2, y2], arrowHeadLength(ctx.lineWidth / scale) * scale);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
+      ctx.lineTo(...shaftEnd);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = ctx.strokeStyle;
       ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI / 6), y2 - headLen * Math.sin(angle - Math.PI / 6));
-      ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI / 6), y2 - headLen * Math.sin(angle + Math.PI / 6));
+      ctx.moveTo(...head[0]);
+      ctx.lineTo(...head[1]);
+      ctx.lineTo(...head[2]);
       ctx.closePath();
       ctx.fill();
     }
@@ -988,10 +1212,22 @@ export class Annotator {
       .filter(a => a.pageNum === pageNum)
       .forEach(a => this._drawAnnotation(ctx, a, w, h));
 
-    // Draw selection indicator on top
-    if (this._selectedIdx !== null && this._selectedPageNum === pageNum) {
-      const sel = this.annotations[this._selectedIdx];
-      if (sel) this._drawSelectionIndicator(ctx, sel, w, h);
+    // Selection indicators and the selection box on top
+    for (const sel of this._selection) {
+      if (sel.pageNum === pageNum) this._drawSelectionIndicator(ctx, sel, w, h);
+    }
+    if (this._marquee?.pageNum === pageNum) {
+      const { from: [ax, ay], to: [bx, by] } = this._marquee;
+      ctx.save();
+      ctx.strokeStyle = '#4488ff';
+      ctx.fillStyle   = 'rgba(68, 136, 255, 0.08)';
+      ctx.lineWidth   = 1;
+      ctx.setLineDash([4, 3]);
+      const x = Math.min(ax, bx) * w, y = Math.min(ay, by) * h;
+      const rw = Math.abs(bx - ax) * w, rh = Math.abs(by - ay) * h;
+      ctx.fillRect(x, y, rw, rh);
+      ctx.strokeRect(x, y, rw, rh);
+      ctx.restore();
     }
   }
 
@@ -1024,7 +1260,7 @@ export class Annotator {
       ctx.stroke();
 
     } else if (annot.type === 'freeHighlight') {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.strokeStyle = annot.color;
       ctx.lineWidth   = annot.thickness * scale;
       ctx.lineCap     = 'round';
@@ -1037,7 +1273,7 @@ export class Annotator {
       ctx.stroke();
 
     } else if (annot.type === 'highlight') {
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = HIGHLIGHT_OPACITY;
       ctx.fillStyle   = annot.color;
       annot.rects.forEach(r => {
         ctx.fillRect(r.x * w, r.y * h, r.width * w, r.height * h);
@@ -1051,8 +1287,9 @@ export class Annotator {
         ctx.fillStyle = annot.fillColor;
         ctx.fillRect(b.x * w, b.y * h, b.w * w, b.h * h);
       }
-      ctx.fillStyle = annot.color;
-      ctx.font      = `${weight}${fs}px ${TEXT_FONT_STACK}`;
+      ctx.fillStyle   = annot.color;
+      ctx.font        = `${weight}${fs}px ${TEXT_FONT_STACK}`;
+      ctx.fontKerning = 'none';
       this._textLines(annot, w).forEach((line: string, i: number) => {
         const x = annot.x * w;
         // Offsets are in points and scaled here, so a line keeps the same

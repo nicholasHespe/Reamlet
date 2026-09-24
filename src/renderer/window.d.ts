@@ -10,6 +10,21 @@ interface EditableContextMenuData {
   canPaste: boolean;
 }
 
+interface SessionTabData {
+  filePath: string;
+  sourceUrl: string | null;
+}
+
+interface WindowSessionData {
+  tabs: SessionTabData[];
+  activeIndex: number;
+}
+
+interface SessionSettingsData {
+  restoreSession: boolean;
+  persistentTabs: boolean;
+}
+
 interface Window {
   api: {
     openFileDialog: () => Promise<{ filePath: string; buffer: ArrayBuffer }[] | null>;
@@ -24,6 +39,10 @@ interface Window {
     setExtensionId: (id: string) => Promise<{ ok: boolean; error?: string }>;
     getReuseTabSetting: () => Promise<{ enabled: boolean }>;
     setReuseTabSetting: (enabled: boolean) => Promise<{ ok: boolean }>;
+    getSessionSettings: () => Promise<SessionSettingsData>;
+    setSessionSettings: (changes: Partial<SessionSettingsData>) => Promise<SessionSettingsData>;
+    updateSession: (session: WindowSessionData) => void;
+    onRestoreSession: (callback: (session: WindowSessionData) => void) => void;
     getTheme: () => Promise<{ mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }>;
     setTheme: (mode: 'light' | 'dark' | 'system') => Promise<{ ok: boolean; error?: string }>;
     onThemeUpdated: (callback: (data: { mode: 'light' | 'dark' | 'system'; effective: 'light' | 'dark' }) => void) => void;
@@ -41,6 +60,7 @@ interface Window {
     getPrinters:            ()                                                          => Promise<{ name: string; isDefault: boolean }[]>;
     openPrinterPreferences: (printerName: string)                                      => Promise<{ ok: boolean; error?: string }>;
     executePrint: (options: {
+      pdfBytes:    ArrayBuffer;
       deviceName:  string;
       copies:      number;
       color:       boolean;

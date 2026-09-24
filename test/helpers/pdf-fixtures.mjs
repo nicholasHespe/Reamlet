@@ -2,12 +2,30 @@
 // pulling geometry back out of a saved file.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PDFDocument, PDFName } from 'pdf-lib';
+import {
+  PDFDocument, PDFName, PDFDict, pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
+} from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs';
+
+import { FONT_FILE_NAMES } from '../../out/renderer/fonts.js';
 
 const STANDARD_FONT_DATA_URL =
   fileURLToPath(new URL('../../node_modules/pdfjs-dist/standard_fonts/', import.meta.url));
+
+/** The bundled font files, as the app would fetch them from assets/fonts/. */
+export const FONT_FILES = Object.fromEntries(
+  Object.entries(FONT_FILE_NAMES).map(([face, name]) =>
+    [face, readFileSync(new URL(`../../assets/fonts/${name}`, import.meta.url))]),
+);
+
+/** Embed a bundled face into `doc`, for measuring text the way the saver does. */
+export async function embedBundledFont(doc, face = 'regular') {
+  doc.registerFontkit(fontkit);
+  return doc.embedFont(FONT_FILES[face], { subset: true });
+}
 
 /** Build a single-page PDF with an explicit MediaBox / CropBox / Rotate. */
 export async function makePdf({ media, crop, rotate }) {
@@ -91,9 +109,55 @@ export async function readAnnotations(bytes, pageIdx = 0) {
       inkList:    inkList ? inkList.asArray().map(e => nums(doc.context.lookup(e) ?? e)) : null,
       color:      get('C')  ? nums(get('C'))  : null,
       fillColor:  get('IC') ? nums(get('IC')) : null,
+      lineEndings: get('LE') ? get('LE').asArray().map(n => n.asString().replace(/^\//, '')) : null,
+      hasAppearance: !!get('AP'),
     });
   }
   return out;
+}
+
+/**
+ * A copy of the document with every annotation's normal appearance stamped into
+ * its page where a viewer paints it, and the annotations removed. Placement
+ * follows PDF 32000 §12.5.5: the appearance's BBox, transformed by its Matrix,
+ * is mapped onto the annotation's /Rect.
+ */
+export async function flattenAppearances(bytes) {
+  const doc = await PDFDocument.load(bytes);
+  for (const page of doc.getPages()) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    for (let i = 0; i < annots.size(); i++) {
+      const dict   = annots.lookup(i, PDFDict);
+      const apRef  = dict.lookupMaybe(PDFName.of('AP'), PDFDict)?.get(PDFName.of('N'));
+      if (!apRef) continue;
+      const stream = doc.context.lookup(apRef);
+      const [bx0, by0, bx1, by1] = nums(stream.dict.lookup(PDFName.of('BBox')));
+      const m = stream.dict.has(PDFName.of('Matrix')) ? nums(stream.dict.lookup(PDFName.of('Matrix'))) : [1, 0, 0, 1, 0, 0];
+      const corners = [[bx0, by0], [bx1, by0], [bx0, by1], [bx1, by1]]
+        .map(([x, y]) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]);
+      const tx0 = Math.min(...corners.map(c => c[0])), tx1 = Math.max(...corners.map(c => c[0]));
+      const ty0 = Math.min(...corners.map(c => c[1])), ty1 = Math.max(...corners.map(c => c[1]));
+      const [rx0, ry0, rx1, ry1] = nums(dict.lookup(PDFName.of('Rect')));
+      const [x0, x1] = [Math.min(rx0, rx1), Math.max(rx0, rx1)];
+      const [y0, y1] = [Math.min(ry0, ry1), Math.max(ry0, ry1)];
+      const sx = (x1 - x0) / (tx1 - tx0), sy = (y1 - y0) / (ty1 - ty0);
+      const name = page.node.newXObject('Ap', apRef);
+      page.pushOperators(
+        pushGraphicsState(),
+        concatTransformationMatrix(sx, 0, 0, sy, x0 - tx0 * sx, y0 - ty0 * sy),
+        drawObject(name),
+        popGraphicsState(),
+      );
+    }
+    page.node.delete(PDFName.of('Annots'));
+  }
+  return doc.save();
+}
+
+/** Text a viewer paints on the page, from page content and annotation appearances alike. */
+export async function readPaintedText(bytes, pageNum = 1) {
+  return readDrawnText(await flattenAppearances(bytes), pageNum);
 }
 
 /** Text drawn into the page content stream, with each run's baseline origin. */
@@ -114,6 +178,10 @@ export async function readDrawnText(bytes, pageNum = 1) {
  * the path's own bounding box stays `[0, 0, width, height]` regardless of page
  * rotation, which is what this reads back, tagged with the active fill colour.
  */
+// Every operator that paints a path's interior, stroked or not.
+const FILL_OPS = new Set(['fill', 'eoFill', 'fillStroke', 'eoFillStroke', 'closeFillStroke', 'closeEOFillStroke']
+  .map(name => pdfjs.OPS[name]));
+
 export async function readFilledRects(bytes, pageNum = 1) {
   const doc  = await loadPdfJs(bytes);
   const page = await doc.getPage(pageNum);
@@ -131,10 +199,61 @@ export async function readFilledRects(bytes, pageNum = 1) {
     } else if (op === OPS.constructPath) {
       const [minX, minY, maxX, maxY] = args[2];
       pending = { width: maxX - minX, height: maxY - minY };
-    } else if (op === OPS.fill && pending) {
+    } else if (FILL_OPS.has(op) && pending) {
       rects.push({ color: fillColor, width: pending.width, height: pending.height });
       pending = null;
     }
   }
   return rects;
+}
+
+// Number of coordinates each path-construction operator consumes.
+const PATH_ARG_COUNTS = {
+  [pdfjs.OPS.moveTo]: 2, [pdfjs.OPS.lineTo]: 2, [pdfjs.OPS.curveTo]: 6,
+  [pdfjs.OPS.curveTo2]: 4, [pdfjs.OPS.curveTo3]: 4, [pdfjs.OPS.closePath]: 0,
+  [pdfjs.OPS.rectangle]: 4,
+};
+const PAINT_OPS = new Map(
+  ['stroke', 'closeStroke', 'fill', 'eoFill', 'fillStroke', 'eoFillStroke',
+   'closeFillStroke', 'closeEOFillStroke', 'endPath'].map(name => [pdfjs.OPS[name], name]),
+);
+
+/**
+ * The paths each annotation's appearance paints, in the order PDF.js renders
+ * them. Each annotation gives its /Rect and a list of paths; a path lists the
+ * points its moveTo/lineTo operators visit, whether it was closed, and the
+ * operator that painted it. Coordinates are in the appearance's own space,
+ * which is page space for an appearance whose BBox is its /Rect.
+ */
+export async function readAnnotationPaths(bytes, pageNum = 1) {
+  const page = await (await loadPdfJs(bytes)).getPage(pageNum);
+  const { fnArray, argsArray } = await page.getOperatorList({ annotationMode: pdfjs.AnnotationMode.ENABLE });
+
+  const annots = [];
+  let current = null;
+  let pending = null;
+  for (let i = 0; i < fnArray.length; i++) {
+    const op = fnArray[i], args = argsArray[i];
+    if (op === pdfjs.OPS.beginAnnotation) {
+      current = { rect: Array.from(args[1]), paths: [] };
+      annots.push(current);
+    } else if (op === pdfjs.OPS.endAnnotation) {
+      current = null;
+    } else if (current && op === pdfjs.OPS.constructPath) {
+      const [ops, coords] = args;
+      const points = [];
+      let closed = false;
+      let k = 0;
+      for (const pathOp of ops) {
+        if (pathOp === pdfjs.OPS.moveTo || pathOp === pdfjs.OPS.lineTo) points.push([coords[k], coords[k + 1]]);
+        if (pathOp === pdfjs.OPS.closePath) closed = true;
+        k += PATH_ARG_COUNTS[pathOp] ?? 0;
+      }
+      pending = { points, closed };
+    } else if (current && pending && PAINT_OPS.has(op)) {
+      current.paths.push({ ...pending, painted: PAINT_OPS.get(op) });
+      pending = null;
+    }
+  }
+  return annots;
 }
