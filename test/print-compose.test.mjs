@@ -3,7 +3,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, PDFName, PDFNumber, StandardFonts, rgb } from 'pdf-lib';
+import {
+  PDFDocument, PDFName, PDFNumber, PDFRef, PDFDict, PDFArray, PDFStream, StandardFonts, rgb, degrees,
+} from 'pdf-lib';
 
 import { buildPrintPdf, getBookletOrder } from '../out/renderer/print-compose.js';
 import { embedAnnotations } from '../out/renderer/saver.js';
@@ -110,6 +112,114 @@ test('a sheet no wider than tall is left unrotated', async () => {
   assert.equal(mediaHpt, A4[1]);
   const sizes = await pageSizes(bytes);
   assert.deepEqual(sizes[0], [A4[0], A4[1]]);
+});
+
+// ── Every layout shows every page ────────────────────────────
+//
+// Each source page carries its own label at its centre. A page is scaled and
+// centred in its slot, so its label lands on the centre of the slot the
+// preview shows it in, whatever the page's size or rotation.
+
+const LAYOUTS = [
+  ...[1, 2, 4, 6, 9, 16].flatMap(pps => [
+    { name: `${pps} per sheet, portrait`,  pps, isBooklet: false, paperW: A4[0], paperH: A4[1] },
+    { name: `${pps} per sheet, landscape`, pps, isBooklet: false, paperW: A4[1], paperH: A4[0] },
+  ]),
+  // The print window's booklet paper: half a landscape sheet per page.
+  { name: 'booklet', pps: 1, isBooklet: true, paperW: A4[1] / 2, paperH: A4[0] },
+];
+
+/** Pages of assorted shapes, each labelled "Page n" at its centre. */
+async function labelledSource(numPages) {
+  const doc  = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let n = 1; n <= numPages; n++) {
+    const size = n % 3 === 0 ? [A4[1], A4[0]] : A4;
+    const page = doc.addPage(size);
+    if (n % 4 === 2) page.setRotation(degrees(90));
+    page.drawRectangle({ x: 20, y: 20, width: size[0] - 40, height: size[1] - 40, borderColor: rgb(0, 0, 0), borderWidth: 4 });
+    page.drawText(`Page ${n}`, { x: size[0] / 2, y: size[1] / 2, size: 10, font });
+  }
+  return doc.save();
+}
+
+/**
+ * Where each page's centre should print: the output page it is on and a point
+ * on it. A sheet wider than it is tall prints a quarter turn clockwise on
+ * portrait paper, its top edge along the paper's left edge.
+ */
+function expectedCentres(layout, totalPages) {
+  const sheets = [];
+  if (layout.isBooklet) {
+    for (const { front, back } of getBookletOrder(totalPages)) sheets.push(front, back);
+  } else {
+    const perSheet = layout.pps;
+    for (let first = 1; first <= totalPages; first += perSheet) {
+      sheets.push(Array.from({ length: Math.min(perSheet, totalPages - first + 1) }, (_, i) => first + i));
+    }
+  }
+  const cols   = layout.isBooklet ? 2 : { 1: 1, 2: 2, 4: 2, 6: 3, 9: 3, 16: 4 }[layout.pps];
+  const rows   = layout.isBooklet ? 1 : layout.pps / cols;
+  const sheetW = layout.paperW * (layout.isBooklet ? 2 : 1), sheetH = layout.paperH;
+  const turned = sheetW > sheetH;
+
+  const centres = new Map();
+  sheets.forEach((slots, sheet) => slots.forEach((pageNum, slot) => {
+    if (pageNum < 1 || pageNum > totalPages) return;
+    const x = (slot % cols + 0.5) * sheetW / cols;
+    const y = sheetH - (Math.floor(slot / cols) + 0.5) * sheetH / rows;
+    centres.set(pageNum, { sheet, at: turned ? [sheetH - y, x] : [x, y] });
+  }));
+  return { centres, sheets: sheets.length };
+}
+
+for (const layout of LAYOUTS) {
+  test(`every page prints in its slot — ${layout.name}`, async () => {
+    const totalPages = 7;
+    const src = await labelledSource(totalPages);
+    const { bytes } = await buildPrintPdf(src, { totalPages, pageRange: null, ...layout });
+
+    const { centres, sheets } = expectedCentres(layout, totalPages);
+    assert.equal((await PDFDocument.load(bytes)).getPageCount(), sheets);
+    for (const [pageNum, { sheet, at }] of centres) {
+      const labels = (await readDrawnText(bytes, sheet + 1)).filter(t => t.str === `Page ${pageNum}`);
+      assert.equal(labels.length, 1, `page ${pageNum} is missing from sheet ${sheet + 1}`);
+      const [{ x, y }] = labels;
+      assert.ok(Math.hypot(x - at[0], y - at[1]) < 0.5,
+        `page ${pageNum} centred at (${x.toFixed(1)}, ${y.toFixed(1)}), want (${at.map(n => n.toFixed(1))})`);
+    }
+  });
+}
+
+/** References in `bytes` to objects the file does not contain. */
+async function missingObjects(bytes) {
+  const doc = await PDFDocument.load(bytes);
+  const seen = new Set(), missing = [];
+  const visit = (obj) => {
+    if (obj instanceof PDFRef) {
+      if (seen.has(obj.tag)) return;
+      seen.add(obj.tag);
+      const target = doc.context.lookup(obj);
+      if (target === undefined) missing.push(obj.tag);
+      else visit(target);
+    } else if (obj instanceof PDFStream) {
+      visit(obj.dict);
+    } else if (obj instanceof PDFDict) {
+      for (const [, value] of obj.entries()) visit(value);
+    } else if (obj instanceof PDFArray) {
+      obj.asArray().forEach(visit);
+    }
+  };
+  visit(doc.context.trailerInfo.Root);
+  return missing;
+}
+
+test('a print job refers only to objects it contains, in every layout', async () => {
+  const src = await annotatedSource();
+  for (const layout of LAYOUTS) {
+    const { bytes } = await buildPrintPdf(src, { totalPages: 1, pageRange: null, ...layout });
+    assert.deepEqual(await missingObjects(bytes), [], layout.name);
+  }
 });
 
 // ── What reaches the printer ─────────────────────────────────
