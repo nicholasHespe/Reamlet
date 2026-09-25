@@ -10,6 +10,7 @@ import path from 'node:path';
 import {
   toWindowSession, readSession, writeSession, shouldRestore, afterUserClose,
   normalizePath, isInside, referencedFiles, adoptDownload, cleanupDownloads,
+  safePdfName, pdfFileName, uniquePath, createUniqueFile,
 } from '../out/session.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -158,6 +159,46 @@ test('a download never overwrites one already kept', () => {
   const adopted = adoptDownload(touch(path.join(inbox, 'report.pdf'), 0, 'third'), inbox, downloads);
   assert.equal(adopted, path.join(downloads, 'report (3).pdf'));
   assert.equal(fs.readFileSync(path.join(downloads, 'report.pdf'), 'utf8'), 'first');
+});
+
+test('a download is named after the file the server sent', () => {
+  const url = 'https://example.com/files/dl?id=7';
+  assert.equal(pdfFileName('attachment; filename="Invoice 2024-05.pdf"', url), 'Invoice 2024-05.pdf');
+  assert.equal(pdfFileName('inline; filename=plain.pdf', url), 'plain.pdf');
+  assert.equal(
+    pdfFileName(`attachment; filename="fallback.pdf"; filename*=UTF-8''R%C3%A9sum%C3%A9%20final.pdf`, url),
+    'Résumé final.pdf',
+  );
+  assert.equal(pdfFileName(`attachment; filename*=UTF-8''%E0%A4%A`, url), 'dl.pdf');
+});
+
+test('without a server filename, a download is named after its URL', () => {
+  assert.equal(pdfFileName(null, 'https://x.sharepoint.com/Shared%20Documents/Q3%20Report.pdf'), 'Q3 Report.pdf');
+  assert.equal(pdfFileName(undefined, 'https://example.com/view?id=1'), 'view.pdf');
+  assert.equal(pdfFileName('', 'https://example.com/'), 'download.pdf');
+  assert.equal(pdfFileName(null, 'https://example.com/bad%E0.pdf'), 'bad%E0.pdf');
+});
+
+test('a download name is safe to save on Windows', () => {
+  assert.equal(safePdfName('..\\..\\evil.pdf'), 'evil.pdf');
+  assert.equal(safePdfName('a/b/../c.pdf'), 'c.pdf');
+  assert.equal(safePdfName('what?:*<>|.pdf'), 'what______.pdf');
+  assert.equal(safePdfName('CON.pdf'), '_CON.pdf');
+  assert.equal(safePdfName('report'), 'report.pdf');
+  assert.equal(safePdfName('Report.PDF'), 'Report.PDF');
+  assert.equal(safePdfName('trailing. '), 'trailing.pdf');
+  assert.equal(safePdfName(''), 'download.pdf');
+  assert.ok(safePdfName('x'.repeat(300)).length <= 200);
+});
+
+test('a download never takes a name already used, numbering from (2)', () => {
+  const dir = tempDir();
+  assert.equal(uniquePath(dir, 'report.pdf'), path.join(dir, 'report.pdf'));
+  const first = createUniqueFile(dir, 'report.pdf');
+  const second = createUniqueFile(dir, 'report.pdf');
+  const third = createUniqueFile(dir, 'report.pdf');
+  assert.deepEqual([first, second, third].map(f => path.basename(f)), ['report.pdf', 'report (2).pdf', 'report (3).pdf']);
+  assert.equal(uniquePath(dir, 'report.pdf'), path.join(dir, 'report (4).pdf'));
 });
 
 test('files outside the inbox, or that cannot be moved, keep their path', () => {

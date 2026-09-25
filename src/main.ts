@@ -14,7 +14,7 @@ const https = require('https');
 
 import {
   readSession, writeSession, toWindowSession, shouldRestore, afterUserClose,
-  referencedFiles, adoptDownload, cleanupDownloads,
+  referencedFiles, adoptDownload, cleanupDownloads, pdfFileName, createUniqueFile,
   type Session, type SessionSettings, type WindowSession,
 } from './session';
 
@@ -764,17 +764,14 @@ function downloadPdf(url: string, redirectsLeft = 5): Promise<string> {
         return;
       }
 
-      let baseName: string;
+      // Keep the server's name for the file, numbered (2), (3), … if taken.
+      let filePath: string;
       try {
-        const base = path.basename(new URL(url).pathname) || 'download';
-        baseName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
-      } catch {
-        baseName = 'download.pdf';
+        filePath = createUniqueFile(dir, pdfFileName(res.headers['content-disposition'], url));
+      } catch (err) {
+        reject(err);
+        return;
       }
-      // Prefix with a random token to prevent concurrent downloads of the same
-      // URL from racing to write the same temp file.
-      const token    = Math.random().toString(36).slice(2, 10);
-      const filePath = path.join(dir, `${token}-${baseName}`);
       const fileStream = fs.createWriteStream(filePath);
       res.pipe(fileStream);
       fileStream.on('finish', () => {
