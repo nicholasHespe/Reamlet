@@ -17,6 +17,10 @@ import {
   referencedFiles, adoptDownload, cleanupDownloads,
   type Session, type SessionSettings, type WindowSession,
 } from './session';
+import {
+  PrinterDefaults, fileJournal, windowsDefaultsStore, askPrinterPreferences, isDevMode,
+  type DevMode, type PreferencesResult,
+} from './printer-defaults';
 
 // ── Window factory ─────────────────────────────────────────────
 
@@ -260,17 +264,37 @@ ipcMain.handle('get-printers', async (event: IpcMainInvokeEvent) => {
   return event.sender.getPrintersAsync();
 });
 
-// Open the Windows printer preferences dialog for the given printer
-ipcMain.handle('open-printer-preferences', async (event: IpcMainInvokeEvent, printerName: string) => {
+// Settings a print has put on a printer for its own length, and the previous
+// ones to give back (see printer-defaults.ts for why they go through the
+// printer's defaults at all).
+let printerDefaults: PrinterDefaults | null = null;
+function getPrinterDefaults(): PrinterDefaults {
+  printerDefaults ??= new PrinterDefaults(
+    windowsDefaultsStore,
+    fileJournal(path.join(app.getPath('userData'), 'printer-defaults-pending.json')),
+  );
+  return printerDefaults;
+}
+
+/**
+ * How long a print keeps its settings as the printer's defaults. Chromium takes
+ * them while it sets the job up, well before the job is done, but its
+ * completion callback can't be counted on to say when (see execute-print).
+ */
+const PRINTER_DEFAULTS_HOLD_MS = 10_000;
+
+// Show the printer driver's own preferences dialog for the given printer and
+// hand back what the user chose, for the renderer to pass to execute-print.
+// Nothing is saved to the printer: that is what the Printers control panel's
+// dialog (`printui.dll /e`) did, and why one pick of a label tray used to stick.
+ipcMain.handle('open-printer-preferences', async (
+  event: IpcMainInvokeEvent, printerName: string, current: DevMode | null,
+): Promise<PreferencesResult> => {
+  if (process.platform !== 'win32') return { ok: false, error: 'Printer preferences are only available on Windows.' };
   const printers = await event.sender.getPrintersAsync();
   const valid = printers.some((p: { name: string }) => p.name === printerName);
   if (!valid) return { ok: false, error: 'Unknown printer.' };
-  return new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    execFile('rundll32', ['printui.dll,PrintUIEntry', '/e', '/n', printerName], (error: Error | null) => {
-      if (error) resolve({ ok: false, error: error.message });
-      else resolve({ ok: true });
-    });
-  });
+  return askPrinterPreferences(printerName, isDevMode(current) ? current : null);
 });
 
 // Open a visible print preview window where the user can configure and execute printing.
@@ -321,7 +345,11 @@ ipcMain.handle('execute-print', async (_event: IpcMainInvokeEvent, options: {
   scaleFactor: number;
   landscape:   boolean;
   pageSize:    { width: number; height: number }; // microns
+  devMode?:    DevMode | null; // settings picked in the printer's preferences dialog, for this print only
 }): Promise<{ ok: boolean; error?: string }> => {
+  if (options.devMode != null && !isDevMode(options.devMode)) {
+    return { ok: false, error: 'Invalid printer settings.' };
+  }
   const tempDir  = path.join(os.tmpdir(), 'ReamletPrintJobs');
   const tempFile = path.join(tempDir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pdf`);
   let printWin: BW | null = null;
@@ -386,6 +414,10 @@ ipcMain.handle('execute-print', async (_event: IpcMainInvokeEvent, options: {
     // real downside beyond making the user wait out the window.
     const RESPONSE_TIMEOUT_MS = 2000;
     let printResult: { ok: true } | { ok: false; error: string } | null = null;
+    // The printer's own preferences (tray, media type...) can only reach the job
+    // as the printer's defaults, which print() reads: so they are the defaults
+    // from here until the job has them, and the printer's own go back after.
+    const releaseDefaults = await getPrinterDefaults().acquire(options.deviceName, options.devMode ?? null);
     const callbackDone = new Promise<void>(resolve => {
       win.webContents.print(
         {
@@ -409,6 +441,9 @@ ipcMain.handle('execute-print', async (_event: IpcMainInvokeEvent, options: {
         }
       );
     });
+    // Neither outcome can leave the printer's defaults held: releasing never throws.
+    void Promise.race([callbackDone, new Promise<void>(resolve => setTimeout(resolve, PRINTER_DEFAULTS_HOLD_MS))])
+      .then(releaseDefaults, releaseDefaults);
 
     await Promise.race([callbackDone, new Promise<void>(resolve => setTimeout(resolve, RESPONSE_TIMEOUT_MS))]);
 
@@ -869,6 +904,8 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    // A print that was cut off may have left a printer's settings as its own.
+    getPrinterDefaults().recover().catch((err: unknown) => console.error('Could not restore printer defaults:', err));
     restoreExtensionIdToManifest();
     restoreThemeSource();
     cleanupAllDownloads();
