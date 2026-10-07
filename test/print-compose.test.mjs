@@ -236,3 +236,78 @@ test('only the part of the page inside its CropBox is printed', async () => {
   const bbox = forms[0].dict.lookup(PDFName.of('BBox')).asArray().map(n => n.asNumber());
   assert.deepEqual(bbox, [100, 150, 400, 550], 'the page should be clipped to its CropBox');
 });
+
+// ── Rotated sheets keep their content ────────────────────────
+//
+// A sheet wider than tall is built once and then embedded into a second
+// document to turn it onto portrait paper. That second embedding used to copy
+// the sheet before pdf-lib had written the source pages embedded on it, so
+// every such printout kept its page size and lost everything on the page —
+// blank paper, and a file other viewers couldn't open. Sizes alone can't show
+// that; these read the text back out.
+
+/** A document of `n` pages of `w` x `h` points, each carrying "Page <number>" in its own content. */
+async function numberedPages(n, w, h) {
+  const doc  = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let i = 1; i <= n; i++) doc.addPage([w, h]).drawText(`Page ${i}`, { x: 100, y: 400, size: 12, font });
+  return doc.save();
+}
+
+/** Every string drawn on any page of `bytes`. */
+async function allText(bytes) {
+  const doc = await PDFDocument.load(bytes);
+  const out = [];
+  for (let p = 1; p <= doc.getPageCount(); p++) out.push(...(await readDrawnText(bytes, p)).map(t => t.str));
+  return out;
+}
+
+test('a landscape page keeps its content when it is rotated onto portrait paper', async () => {
+  const src = await withText(await makePdf({ media: [0, 0, 842, 595] }), 'Landscape text', 100, 400);
+  const { bytes, mediaWpt } = await buildPrintPdf(src, {
+    totalPages: 1, pageRange: null, pps: 1, isBooklet: false, paperW: 842, paperH: 595,
+  });
+
+  const [mark] = await readDrawnText(bytes);
+  assert.equal(mark?.str, 'Landscape text');
+  // Turned a quarter clockwise onto the portrait sheet: (x, y) lands at (width - y, x).
+  assert.ok(Math.abs(mark.x - (mediaWpt - 400)) < EPS && Math.abs(mark.y - 100) < EPS,
+    `printed at [${mark.x.toFixed(2)}, ${mark.y.toFixed(2)}], expected [${mediaWpt - 400}, 100]`);
+});
+
+test('every landscape page of a document keeps its content', async () => {
+  const { bytes } = await buildPrintPdf(await numberedPages(3, 842, 595), {
+    totalPages: 3, pageRange: null, pps: 1, isBooklet: false, paperW: 842, paperH: 595,
+  });
+  assert.deepEqual(await allText(bytes), ['Page 1', 'Page 2', 'Page 3']);
+});
+
+test('pages printed several to a landscape sheet keep their content', async () => {
+  const { bytes } = await buildPrintPdf(await numberedPages(4, 595, 842), {
+    totalPages: 4, pageRange: null, pps: 4, isBooklet: false, paperW: 842, paperH: 595,
+  });
+  assert.deepEqual((await allText(bytes)).sort(), ['Page 1', 'Page 2', 'Page 3', 'Page 4']);
+});
+
+test('booklet spreads, always rotated, keep their content', async () => {
+  const { bytes } = await buildPrintPdf(await numberedPages(4, 595, 842), {
+    totalPages: 4, pageRange: null, pps: 1, isBooklet: true, paperW: 595, paperH: 842,
+  });
+  assert.deepEqual((await allText(bytes)).sort(), ['Page 1', 'Page 2', 'Page 3', 'Page 4']);
+});
+
+test('a rotated printout is self-contained: nothing in it refers to an object that does not exist', async () => {
+  const { bytes } = await buildPrintPdf(await numberedPages(1, 842, 595), {
+    totalPages: 1, pageRange: null, pps: 1, isBooklet: false, paperW: 842, paperH: 595,
+  });
+  const doc = await PDFDocument.load(bytes);
+  const dangling = [];
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    const resources = obj.dict?.get?.(PDFName.of('Resources'));
+    const xobjects  = resources?.get?.(PDFName.of('XObject'));
+    for (const [name, ref] of xobjects?.entries?.() ?? []) {
+      if (doc.context.lookup(ref) === undefined) dangling.push(name.asString());
+    }
+  }
+  assert.deepEqual(dangling, []);
+});

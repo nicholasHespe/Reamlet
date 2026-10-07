@@ -204,7 +204,13 @@ export async function buildPrintPdf(srcBytes: Uint8Array, params: BuildPrintPdfP
   // edge — "the sheet is turned clockwise to read it", matching prior behaviour.
   const finalDoc = await PDFDocument.create();
   const naturalPageCount = naturalDoc.getPageCount();
-  const rotatedEmbeds = naturalPageCount > 0 ? await finalDoc.embedPdf(naturalDoc, [...Array(naturalPageCount).keys()]) : [];
+  // Embed the sheets as saved, not as they are in memory: pdf-lib only writes
+  // the source pages embedded onto a sheet when the document is saved, so until
+  // then a sheet refers to them without them existing. Embedding it as it stands
+  // copies those references and not what they point to — and every landscape
+  // printout comes out with its page content missing.
+  const naturalBytes = await naturalDoc.save();
+  const rotatedEmbeds = naturalPageCount > 0 ? await finalDoc.embedPdf(naturalBytes, [...Array(naturalPageCount).keys()]) : [];
   for (const embedded of rotatedEmbeds) {
     const page = finalDoc.addPage([mediaWpt, mediaHpt]);
     page.drawPage(embedded, { x: mediaWpt, y: 0, rotate: degrees(90) });
