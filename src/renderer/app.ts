@@ -13,6 +13,7 @@ const { PDFDocument } = _pdfLib as unknown as typeof PDFLibNS;
 import { FindBar }          from './find.js';
 import { ToolbarLayout }    from './toolbar.js';
 import { TextBar }          from './text-bar.js';
+import { initPrinterSettings } from './printer-settings.js';
 import { buildSwatchPanel, markActiveSwatch, NO_FILL } from './palette.js';
 import type { Tab, CloseContext, Annotation } from './types.js';
 
@@ -2019,6 +2020,7 @@ const _menuActions = {
   'zoom-100':    () => window.api.setUiZoom(1.0),
   'zoom-125':    () => window.api.setUiZoom(1.25),
   'zoom-150':    () => window.api.setUiZoom(1.5),
+  'settings':    () => { void _openSettingsModal(); },
   'extension-id': () => _openExtensionIdModal(),
   'zoom-200':    () => window.api.setUiZoom(2.0),
   'fit-width':   () => fitWidth(),
@@ -2080,6 +2082,21 @@ window.api.onMenuEvent((event) => {
     case 'menu-theme-light':  _setTheme('light'); break;
     case 'menu-theme-dark':   _setTheme('dark'); break;
     case 'menu-theme-system': _setTheme('system'); break;
+  }
+});
+
+// ── Settings modal ───────────────────────────────────────────────────
+
+// Which printer to use for which page size. "The page you're viewing" is the one
+// in view in the active tab.
+const _openSettingsModal = initPrinterSettings(async () => {
+  const tab = activeTab;
+  if (!tab || tab.unavailable) return null;
+  try {
+    const box = await tab.viewer.getPageBox(tab.viewer.getVisiblePageNum());
+    return { widthPt: box.width, heightPt: box.height };
+  } catch {
+    return null; // still loading, or asleep with this page's size never measured
   }
 });
 

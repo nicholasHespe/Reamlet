@@ -975,6 +975,58 @@ button[data-toggle].active .tdrop-check::before { content: '\2713'; }
 .modal-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .modal-btn.primary:hover { background: #0066aa; }
 
+/* ── Settings modal ─────────────────────────────────────────────────── */
+#settings-modal .modal-box { width: 720px; }
+.settings-section h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.settings-section .modal-hint { margin-bottom: 10px; line-height: 1.4; }
+
+#printer-rules-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.rule-row,
+.rule-add-row { display: flex; align-items: center; gap: 8px; }
+.rule-row {
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--tab-bg);
+}
+.rule-size { flex: 1; min-width: 0; font-size: 13px; }
+.rule-empty { font-size: 12px; color: var(--text-dim); padding: 4px 0 8px; }
+.rule-remove {
+  width: 24px; height: 24px;
+  border: none; border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px; line-height: 1;
+  cursor: pointer;
+}
+.rule-remove:hover { background: var(--hover-overlay-strong); color: var(--text); }
+
+.rule-add { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.rule-add-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+#rule-current-size { flex: 1; min-width: 0; font-size: 13px; }
+.rule-times { color: var(--text-dim); }
+.rule-row select { width: 300px; max-width: none; }
+#rule-error { min-height: 16px; margin-top: 8px; font-size: 12px; color: var(--error-text); }
+
+.settings-section select,
+.settings-section input[type="text"] {
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+  outline: none;
+}
+.settings-section select:focus,
+.settings-section input[type="text"]:focus { border-color: var(--accent); }
+.settings-section select { cursor: pointer; max-width: 240px; }
+.settings-section input[type="text"] { width: 76px; }
+.rule-add-row .modal-btn { padding: 6px 14px; }
+.rule-add-row .modal-btn:disabled { opacity: 0.5; cursor: default; }
+.rule-add-row .modal-btn:disabled:hover { background: var(--tab-bg); }
+
+
 /* ── Combine modal ────────────────────────────────────────────── */
 #combine-list { display: flex; flex-direction: column; gap: 6px; }
 

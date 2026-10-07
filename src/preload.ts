@@ -110,6 +110,11 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('pdf-data', (_e: unknown, data: { buffer: ArrayBuffer }) => callback(data));
   },
   getPrinters:            () => ipcRenderer.invoke('get-printers'),
+
+  // Which printer to use for which page size (File > Settings)
+  getPrinterRules:        () => ipcRenderer.invoke('get-printer-rules'),
+  setPrinterRules:        (rules: { widthMm: number; heightMm: number; printer: string }[]) => ipcRenderer.invoke('set-printer-rules', rules),
+  getPrinterForPageSize:  (widthPt: number, heightPt: number) => ipcRenderer.invoke('printer-for-page-size', widthPt, heightPt),
   openPrinterPreferences: (printerName: string) => ipcRenderer.invoke('open-printer-preferences', printerName),
   executePrint: (options: {
     pdfBytes:    ArrayBuffer;

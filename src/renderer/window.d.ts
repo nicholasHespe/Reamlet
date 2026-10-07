@@ -20,6 +20,13 @@ interface WindowSessionData {
   activeIndex: number;
 }
 
+/** Documents whose pages are this size (short side first) print on `printer`. */
+interface PrinterRuleData {
+  widthMm:  number;
+  heightMm: number;
+  printer:  string;
+}
+
 interface SessionSettingsData {
   restoreSession: boolean;
   persistentTabs: boolean;
@@ -58,6 +65,9 @@ interface Window {
     openPrintPreview:       (filePath: string)                                         => Promise<{ ok: boolean; error?: string }>;
     onPdfData:              (callback: (data: { buffer: ArrayBuffer }) => void)        => void;
     getPrinters:            ()                                                          => Promise<{ name: string; isDefault: boolean }[]>;
+    getPrinterRules:        ()                                                          => Promise<PrinterRuleData[]>;
+    setPrinterRules:        (rules: PrinterRuleData[])                                  => Promise<PrinterRuleData[]>;
+    getPrinterForPageSize:  (widthPt: number, heightPt: number)                         => Promise<string | null>;
     openPrinterPreferences: (printerName: string)                                      => Promise<{ ok: boolean; error?: string }>;
     executePrint: (options: {
       pdfBytes:    ArrayBuffer;

@@ -36,6 +36,7 @@
             <button data-menu="toggle-persistent-tabs" data-toggle="persistent-tabs"
                     title="Reopen your tabs every time Reamlet starts, even after you close it"><span class="tdrop-check"></span>Keep Tabs Between Sessions</button>
             <div class="tdrop-sep"></div>
+            <button data-menu="settings">Settings…</button>
             <button data-menu="extension-id">Extension ID…</button>
             <div class="tdrop-sep"></div>
             <button data-menu="quit">Quit</button>
@@ -541,6 +542,49 @@
         <button class="modal-btn" id="close-cancel">Cancel</button>
         <button class="modal-btn" id="close-discard">Discard All</button>
         <button class="modal-btn primary" id="close-save">Save All</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Settings modal ───────────────────────────────────────────── -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-title">Settings</div>
+      <div class="modal-body">
+        <section class="settings-section">
+          <h3>Printer by page size</h3>
+          <p class="modal-hint">When you print, Reamlet selects the printer set here for the document's page size. Pages count as the same size whichever way up they are, and within 3&nbsp;mm.</p>
+          <div id="printer-rules-list"></div>
+
+          <div class="rule-add">
+            <div class="rule-add-title">Add the page you're viewing</div>
+            <div class="rule-add-row">
+              <span id="rule-current-size"></span>
+              <select id="rule-current-printer" aria-label="Printer for the current page size"></select>
+              <button class="modal-btn" id="rule-current-add">Add</button>
+            </div>
+          </div>
+
+          <div class="rule-add">
+            <div class="rule-add-title">Add another size</div>
+            <div class="rule-add-row">
+              <input id="rule-width"  type="text" inputmode="decimal" placeholder="Width"  aria-label="Width" autocomplete="off" />
+              <span class="rule-times">&times;</span>
+              <input id="rule-height" type="text" inputmode="decimal" placeholder="Height" aria-label="Height" autocomplete="off" />
+              <select id="rule-unit" aria-label="Unit">
+                <option value="mm">mm</option>
+                <option value="in">in</option>
+              </select>
+              <select id="rule-custom-printer" aria-label="Printer for this size"></select>
+              <button class="modal-btn" id="rule-custom-add">Add</button>
+            </div>
+          </div>
+          <p id="rule-error" role="alert"></p>
+        </section>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-btn" id="settings-cancel">Cancel</button>
+        <button class="modal-btn primary" id="settings-save">Save</button>
       </div>
     </div>
   </div>
