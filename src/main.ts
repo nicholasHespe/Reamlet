@@ -17,6 +17,7 @@ import {
   referencedFiles, adoptDownload, cleanupDownloads,
   type Session, type SessionSettings, type WindowSession,
 } from './session';
+import { WebOpenGate, WEB_OPEN_LIMIT, WEB_OPEN_QUIET_MS, describeFailures } from './web-opens';
 
 // ── Window factory ─────────────────────────────────────────────
 
@@ -802,20 +803,65 @@ function downloadPdf(url: string, redirectsLeft = 5): Promise<string> {
   });
 }
 
+// ── Floods of web addresses ────────────────────────────────────
+//
+// If the browser extension replays old downloads, Reamlet is launched with
+// hundreds of web addresses in a row (#108). Only the first few get through;
+// the rest are skipped without raising the window, and reported once the flood
+// is over. Local files are never limited: Explorer opens a selection of many
+// PDFs the same way, one launch each.
+
+const _webOpenGate = new WebOpenGate();
+let _floodReportTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Whether a request to open `target` should go ahead; a skipped one is counted for the flood report. */
+function admitOpenRequest(target: string | null): boolean {
+  if (!target || !isHttpUrl(target)) return true;
+  if (_webOpenGate.admit()) return true;
+  // Report when requests have stopped for the quiet period, not while they still arrive.
+  if (_floodReportTimer) clearTimeout(_floodReportTimer);
+  _floodReportTimer = setTimeout(reportSkippedOpens, WEB_OPEN_QUIET_MS + 500);
+  return false;
+}
+
+function reportSkippedOpens(): void {
+  _floodReportTimer = null;
+  const skipped = _webOpenGate.takeSkipped();
+  if (skipped === 0) return;
+  dialog.showMessageBox({
+    type:    'warning',
+    title:   'Reamlet — Too many PDFs from the web at once',
+    message: `Reamlet opened the first ${WEB_OPEN_LIMIT} PDFs from the web and skipped ${skipped} more that arrived straight after.`,
+    detail:  'If you did not ask for these, the Reamlet browser extension may be reopening old downloads. ' +
+             'Turn it off from its toolbar popup until it is updated.',
+    buttons: ['OK'],
+  });
+}
+
+// Web addresses that couldn't be opened are reported together, so a run of
+// failures is one dialog rather than one each.
+const FAILURE_REPORT_DELAY_MS = 1000;
+let _openFailures: string[] = [];
+let _failureReportTimer: ReturnType<typeof setTimeout> | null = null;
+
+function reportOpenFailure(reason: string): void {
+  _openFailures.push(reason);
+  if (_failureReportTimer) return;
+  _failureReportTimer = setTimeout(() => {
+    const { title, message } = describeFailures(_openFailures);
+    _openFailures = [];
+    _failureReportTimer = null;
+    dialog.showMessageBox({ type: 'error', title, message, buttons: ['OK'] });
+  }, FAILURE_REPORT_DELAY_MS);
+}
+
 // Resolve a target (URL or local path) to a local file path ready for opening.
 async function resolveTarget(target: string): Promise<OpenTarget | null> {
   if (isHttpUrl(target)) {
     try {
-      const filePath = await downloadPdf(target);
-      dialog.showMessageBox({
-        type:    'info',
-        title:   'Reamlet — Download complete',
-        message: `Downloaded to:\n${filePath}`,
-        buttons: ['OK'],
-      });
-      return { filePath, sourceUrl: target };
+      return { filePath: await downloadPdf(target), sourceUrl: target };
     } catch (err) {
-      dialog.showErrorBox('Reamlet — Could not open URL', (err as Error).message ?? 'Download failed.');
+      reportOpenFailure((err as Error).message || 'Download failed.');
       return null;
     }
   }
@@ -845,6 +891,7 @@ if (!gotLock) {
   app.on('second-instance', async (_event: ElectronEvent, argv: string[]) => {
     const target     = getArgvTarget(argv);
     const background = argv.includes('--background');
+    if (!admitOpenRequest(target)) return; // part of a flood: don't even raise the window
     // Find the existing window, bring it forward, and open the file as a new tab
     const wins = BrowserWindow.getAllWindows();
     const win  = wins[0];
@@ -875,7 +922,7 @@ if (!gotLock) {
     setInterval(cleanupAllDownloads, 60 * 60 * 1000);
     const pendingTarget = _pendingOpenFile || getArgvTarget(process.argv);
     _pendingOpenFile = null;
-    const openTarget  = pendingTarget ? await resolveTarget(pendingTarget) : null;
+    const openTarget  = pendingTarget && admitOpenRequest(pendingTarget) ? await resolveTarget(pendingTarget) : null;
     const background  = process.argv.includes('--background');
     openStartupWindows(openTarget, background);
     buildMenu();
