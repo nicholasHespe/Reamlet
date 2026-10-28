@@ -3,6 +3,7 @@
 
 import { PDFViewer }        from './viewer.js';
 import { Annotator }        from './annotator.js';
+import { setClipboardListener, receiveClipboard } from './annotation-clipboard.js';
 import { embedAnnotations, embedFooter, embedWatermark } from './saver.js';
 import { loadFontFiles }    from './fonts.js';
 // @ts-expect-error — pdf-lib is imported via direct path for Electron's file:// ESM loader
@@ -340,7 +341,8 @@ viewerHost.addEventListener('contextmenu', (e) => {
   if ((e.target as Element)?.closest('textarea, input, [contenteditable="true"]')) return;
   e.preventDefault();
 
-  // Show Cut only when a cuttable annotation is selected; Paste when clipboard has content
+  // Show Cut only when a cuttable annotation is selected; Paste when the
+  // annotation clipboard (shared by all tabs and windows) has content
   const ann = activeTab.annotator;
   ctxCut.style.display   = ann?.canCopy()      ? '' : 'none';
   ctxPaste.style.display = ann?.hasClipboard() ? '' : 'none';
@@ -370,7 +372,8 @@ contextMenu.addEventListener('mousedown', (e) => {
     case 'cut':   activeTab?.annotator?.cut();   break;
     case 'paste': activeTab?.annotator?.paste();  break;
     case 'copy':
-      navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
+      if (activeTab?.annotator?.canCopy()) activeTab.annotator.copy();
+      else navigator.clipboard.writeText(window.getSelection()?.toString() ?? '');
       break;
     case 'highlight':
       _selectTool('highlight');
@@ -431,6 +434,12 @@ editableCtxMenu.addEventListener('mousedown', (e) => {
     case 'paste':             window.api.editableCommand('paste');                   break;
   }
 });
+
+// ── Annotation clipboard, shared with the other windows ─────────
+
+setClipboardListener(json => window.api.setAnnotationClipboard(json));
+window.api.onAnnotationClipboard(receiveClipboard);
+void window.api.getAnnotationClipboard().then(receiveClipboard);
 
 // ── Tab context menu ────────────────────────────────────────────
 

@@ -206,6 +206,19 @@ ipcMain.handle('open-file-from-path', (_event: IpcMainInvokeEvent, filePath: str
   }
 });
 
+// Annotations cut or copied in any window, as JSON, so every window can paste
+// them. Reamlet's own clipboard: the system clipboard is left alone.
+let annotationClipboard: string | null = null;
+
+ipcMain.on('annotation-clipboard-set', (event: IpcMainEvent, json: string) => {
+  annotationClipboard = json;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.webContents !== event.sender) win.webContents.send('annotation-clipboard', json);
+  }
+});
+
+ipcMain.handle('annotation-clipboard-get', () => annotationClipboard);
+
 // Show a native message box and return the index of the button pressed
 ipcMain.handle('show-message-box', async (event: IpcMainInvokeEvent, options: Electron.MessageBoxOptions) => {
   const win = BrowserWindow.fromWebContents(event.sender);

@@ -60,6 +60,9 @@ interface Window {
     onMenuEvent: (callback: (event: string) => void) => void;
     onOpenFileData: (callback: (data: { filePath: string; buffer: ArrayBuffer; sourceUrl: string | null }) => void) => void;
     onCloseTabByFilepath: (callback: (filePath: string) => void) => void;
+    setAnnotationClipboard: (json: string) => void;
+    getAnnotationClipboard: () => Promise<string | null>;
+    onAnnotationClipboard: (callback: (json: string) => void) => void;
     copyFileToClipboard: (filePath: string) => Promise<{ ok: boolean }>;
     revealInExplorer:    (filePath: string) => Promise<{ ok: boolean }>;
     openPrintPreview:       (filePath: string)                                         => Promise<{ ok: boolean; error?: string }>;
