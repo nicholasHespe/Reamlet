@@ -29,6 +29,16 @@ import { sanitizeRules, findRule, MM_PER_POINT, type PrinterRule } from './print
 
 const isMac = process.platform === 'darwin';
 
+/**
+ * A file's contents as an ArrayBuffer of exactly its bytes. A small file's
+ * Buffer is a view into Node's shared pool, so its `.buffer` also carries
+ * whatever else is in the pool.
+ */
+function readFileBytes(filePath: string): ArrayBuffer {
+  const buffer = fs.readFileSync(filePath);
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+}
+
 /** A document to open in a freshly created window, with its web origin when it came from one. */
 interface OpenTarget { filePath: string; sourceUrl: string | null }
 
@@ -79,10 +89,9 @@ function createWindow(openTarget: OpenTarget | null, showInactive = false, resto
     if (restore) win.webContents.send('restore-session', restore);
     if (!openTarget) return;
     try {
-      const buffer = fs.readFileSync(openTarget.filePath);
       win.webContents.send('open-file-data', {
         filePath:  openTarget.filePath,
-        buffer:    buffer.buffer,
+        buffer:    readFileBytes(openTarget.filePath),
         sourceUrl: openTarget.sourceUrl,
       });
     } catch { /* ignore */ }
@@ -314,8 +323,7 @@ ipcMain.handle('open-print-preview', async (_event: IpcMainInvokeEvent, filePath
   try {
     await previewWin.loadFile(path.join(__dirname, '..', 'renderer', 'print-preview.html'));
     previewWin.show();
-    const buffer = fs.readFileSync(filePath);
-    previewWin.webContents.send('pdf-data', { buffer: buffer.buffer });
+    previewWin.webContents.send('pdf-data', { buffer: readFileBytes(filePath) });
     return { ok: true };
   } catch (err) {
     previewWin.destroy();
@@ -636,8 +644,7 @@ app.on('open-file', (e: ElectronEvent, filePath: string) => {
     if (win.isMinimized()) win.restore();
     win.focus();
     try {
-      const buffer = fs.readFileSync(filePath);
-      win.webContents.send('open-file-data', { filePath, buffer: buffer.buffer, sourceUrl: null });
+      win.webContents.send('open-file-data', { filePath, buffer: readFileBytes(filePath), sourceUrl: null });
     } catch { /* ignore */ }
   } else {
     createWindow({ filePath, sourceUrl: null });
@@ -822,10 +829,9 @@ if (!gotLock) {
       const resolved = await resolveTarget(target);
       if (resolved) {
         try {
-          const buffer = fs.readFileSync(resolved.filePath);
           win.webContents.send('open-file-data', {
             filePath:  resolved.filePath,
-            buffer:    buffer.buffer,
+            buffer:    readFileBytes(resolved.filePath),
             sourceUrl: resolved.sourceUrl,
           });
         } catch { /* ignore */ }
