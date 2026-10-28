@@ -23,6 +23,7 @@ import {
   PrinterDefaults, fileJournal, windowsDefaultsStore, askPrinterPreferences, isDevMode,
   type DevMode, type PreferencesResult,
 } from './printer-defaults';
+import { sanitizeRules, findRule, MM_PER_POINT, type PrinterRule } from './printer-rules';
 
 // ── Window factory ─────────────────────────────────────────────
 
@@ -457,6 +458,26 @@ function restoreThemeSource(): void {
 function effectiveTheme(): 'light' | 'dark' {
   return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
 }
+
+// ── Printer by page size ────────────────────────────────────────────────
+
+function printerRules(): PrinterRule[] {
+  return sanitizeRules(readUserDataSettings().printerRules);
+}
+
+ipcMain.handle('get-printer-rules', () => printerRules());
+
+ipcMain.handle('set-printer-rules', (_event: IpcMainInvokeEvent, rules: unknown) => {
+  const settings = readUserDataSettings();
+  settings.printerRules = sanitizeRules(rules);
+  writeUserDataSettings(settings);
+  return printerRules();
+});
+
+// The printer set for pages of this size (PDF points), or null for none.
+ipcMain.handle('printer-for-page-size', (_event: IpcMainInvokeEvent, widthPt: number, heightPt: number): string | null => {
+  return findRule(printerRules(), widthPt * MM_PER_POINT, heightPt * MM_PER_POINT)?.printer ?? null;
+});
 
 // ── "Switch to already-open tab" setting ─────────────────────────
 

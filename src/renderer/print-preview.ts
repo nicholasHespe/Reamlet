@@ -86,7 +86,7 @@ let _compositeUrls: string[] = []; // blob URLs for composite renders; revoked b
 let sourcePdfBytes: Uint8Array | null = null; // the original PDF — what's actually sent to print, via print-compose.ts
 
 // ── Printers ──────────────────────────────────────────────────
-(async () => {
+const printersLoaded = (async () => {
   const printers = await window.api.getPrinters();
   selPrinter.innerHTML = '';
   if (printers.length === 0) {
@@ -104,6 +104,19 @@ let sourcePdfBytes: Uint8Array | null = null; // the original PDF — what's act
     selPrinter.appendChild(opt);
   });
 })();
+
+// Only the user's own pick fires 'change'; setting .value from code doesn't.
+let printerPickedByUser = false;
+selPrinter.addEventListener('change', () => { printerPickedByUser = true; });
+
+// Switch to the printer set for pages of this size (File > Settings), if there
+// is one and it is installed; otherwise, or if the user has already chosen one,
+// the printer is left as it is.
+async function selectPrinterForPageSize(widthPt: number, heightPt: number) {
+  const [, name] = await Promise.all([printersLoaded, window.api.getPrinterForPageSize(widthPt, heightPt)]);
+  if (printerPickedByUser) return;
+  if (name && [...selPrinter.options].some(o => o.value === name)) selPrinter.value = name;
+}
 
 // What was picked in each printer's preferences dialog (tray, media type, quality...),
 // kept here and handed to the print itself — never saved as the printer's own defaults,
@@ -431,6 +444,15 @@ window.api.onPdfData(async ({ buffer }) => {
     return;
   }
   totalPages = pdfDoc.numPages;
+
+  // Pick the printer for this document's page size without holding up rendering.
+  // Orientation doesn't matter to the match, so the page's own rotation can't mislead it.
+  void pdfDoc.getPage(1)
+    .then(first => {
+      const { width, height } = first.getViewport({ scale: 1 });
+      return selectPrinterForPageSize(width, height);
+    })
+    .catch(() => { /* no rule applied: the printer stays as it is */ });
 
   try {
     for (let pageNum = 1; pageNum <= totalPages; pageNum++) {

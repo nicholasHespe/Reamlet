@@ -111,6 +111,11 @@ contextBridge.exposeInMainWorld('api', {
   },
   getPrinters:            () => ipcRenderer.invoke('get-printers'),
   openPrinterPreferences: (printerName: string, current: string | null) => ipcRenderer.invoke('open-printer-preferences', printerName, current),
+
+  // Which printer to use for which page size (File > Settings)
+  getPrinterRules:        () => ipcRenderer.invoke('get-printer-rules'),
+  setPrinterRules:        (rules: { widthMm: number; heightMm: number; printer: string }[]) => ipcRenderer.invoke('set-printer-rules', rules),
+  getPrinterForPageSize:  (widthPt: number, heightPt: number) => ipcRenderer.invoke('printer-for-page-size', widthPt, heightPt),
   executePrint: (options: {
     pdfBytes:    ArrayBuffer;
     deviceName:  string;
