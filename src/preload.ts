@@ -98,6 +98,13 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('close-tab-by-filepath', (_e: unknown, filePath: string) => callback(filePath));
   },
 
+  // The annotation clipboard, shared by every window as JSON
+  setAnnotationClipboard: (json: string) => ipcRenderer.send('annotation-clipboard-set', json),
+  getAnnotationClipboard: () => ipcRenderer.invoke('annotation-clipboard-get'),
+  onAnnotationClipboard: (callback: (json: string) => void) => {
+    ipcRenderer.on('annotation-clipboard', (_e: unknown, json: string) => callback(json));
+  },
+
   // Copy a file to the clipboard so it can be pasted into Explorer, email, etc.
   copyFileToClipboard: (filePath: string) => ipcRenderer.invoke('copy-file-to-clipboard', filePath),
 

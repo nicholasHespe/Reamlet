@@ -10,6 +10,7 @@ import {
 } from './text-layout.js';
 import { arrowGeometry, arrowHeadLength } from './arrow-geometry.js';
 import { HIGHLIGHT_OPACITY } from './annotation-style.js';
+import { clipboardHasItems, clipboardItems, setClipboard, placeClipboard, type PageSize } from './annotation-clipboard.js';
 
 /** Width of a newly placed text box, in PDF points. */
 const TEXT_DEFAULT_WIDTH = 160;
@@ -91,8 +92,6 @@ export class Annotator {
   _drag: { x: number; y: number; pageRect: DOMRect; originals: Map<Annotation, Annotation> } | null;
   /** An in-progress Shift+drag selection box, in normalised page coords. */
   _marquee: { pageNum: number; p: PageData; pageRect: DOMRect; from: [number, number]; to: [number, number] } | null;
-  /** Annotations cut or copied, waiting to be pasted. */
-  _clipboard: Annotation[];
   /** The text box being typed into, while one is open. */
   _textEdit: TextBarTarget | null;
   onCommit?: () => void;
@@ -131,7 +130,6 @@ export class Annotator {
     this._selection = new Set();
     this._drag      = null;
     this._marquee   = null;
-    this._clipboard = [];
     this._textEdit  = null;
     this._lastCursorPageNum = null;
     this._lastCursorNorm    = null;
@@ -344,20 +342,21 @@ export class Annotator {
     return this._cuttableSelection().length > 0;
   }
 
+  // The clipboard is shared by every tab and window (see annotation-clipboard.ts).
   hasClipboard(): boolean {
-    return this._clipboard.length > 0;
+    return clipboardHasItems();
   }
 
   copy() {
     const items = this._cuttableSelection();
     if (items.length === 0) return;
-    this._clipboard = JSON.parse(JSON.stringify(items)) as Annotation[];
+    setClipboard(items.map(a => ({ annotation: a, pageSize: this._pageSize(a.pageNum) })));
   }
 
   cut() {
     const items = this._cuttableSelection();
     if (items.length === 0) return;
-    this._clipboard = JSON.parse(JSON.stringify(items)) as Annotation[];
+    this.copy();
     this._removeAnnotations(items);
     this._pushHistory();
   }
@@ -369,27 +368,23 @@ export class Annotator {
    * was pasted becomes the selection.
    */
   paste() {
-    if (this._clipboard.length === 0) return;
-    const clones = JSON.parse(JSON.stringify(this._clipboard)) as Annotation[];
-    let dx = 0.03, dy = 0.03;
-    if (this._lastCursorPageNum !== null && this._lastCursorNorm !== null) {
-      const [cx, cy] = this._lastCursorNorm;
-      const [ax, ay] = Annotator._pasteAnchor(clones[0]);
-      dx = cx - ax;
-      dy = cy - ay;
-      for (const c of clones) c.pageNum = this._lastCursorPageNum;
-    }
-    for (const c of clones) this._moveAnnotation(c, dx, dy);
+    const cursor = this._lastCursorPageNum !== null && this._lastCursorNorm !== null
+      ? { pageNum: this._lastCursorPageNum, at: this._lastCursorNorm }
+      : null;
+    const clones = placeClipboard(clipboardItems(), cursor, this.pages.length, n => this._pageSize(n));
+    if (clones.length === 0) return;
     this.annotations.push(...clones);
     this._pushHistory();
     this._setSelection(clones);
   }
 
-  /** The point of an annotation that pasting puts at the cursor. */
-  static _pasteAnchor(ann: Annotation): [number, number] {
-    if (ann.type === 'text') return [ann.x, ann.y];
-    const s = ann as ShapeAnnotation;
-    return [(s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2];
+  /** A page's size in points as displayed, or null before it has been laid out. */
+  _pageSize(pageNum: number): PageSize | null {
+    const p     = this.pages[pageNum - 1];
+    const scale = this.viewer?.scale;
+    if (!p || !scale) return null;
+    const w = parseFloat(p.wrapper.style.width), h = parseFloat(p.wrapper.style.height);
+    return w > 0 && h > 0 ? [w / scale, h / scale] : null;
   }
 
   deleteSelected() {
