@@ -446,6 +446,7 @@ tabContextMenu.addEventListener('mousedown', (e) => {
     case 'save':         saveTab(tab); break;
     case 'save-as':      saveTabCopy(tab); break;
     case 'print':        switchTab(tab); printTab(tab); break;
+    case 'refresh':      refreshTab(tab); break;
     case 'copy-file':    window.api.copyFileToClipboard(tab.filePath!); break;
     case 'reveal':       window.api.revealInExplorer(tab.filePath!); break;
     case 'close-others':
@@ -712,7 +713,8 @@ function renderTabBar() {
       e.preventDefault();
       e.stopPropagation();
       _tabContextMenuTab = t;
-      const hasDisk = !!(t.filePath && /[\\/]/.test(t.filePath)) && !t.dirty;
+      const hasDisk = _hasDiskFile(t) && !t.dirty;
+      tabContextMenu.querySelector<HTMLButtonElement>('[data-tctx="refresh"]')!.disabled = !_hasDiskFile(t);
       const btnCopy   = tabContextMenu.querySelector<HTMLButtonElement>('[data-tctx="copy-file"]')!;
       const btnReveal = tabContextMenu.querySelector<HTMLButtonElement>('[data-tctx="reveal"]')!;
       btnCopy.disabled   = !hasDisk;
@@ -1008,15 +1010,71 @@ async function _loadFromDisk(tab: Tab) {
   if (tab.unavailable) {
     tab.unavailable = null;
     tab.pane.querySelector('.tab-unavailable')?.remove();
-    const loadingEl = document.createElement('div');
-    loadingEl.className = 'loading-overlay';
-    loadingEl.innerHTML = '<div class="spinner"></div>';
-    tab.pane.appendChild(loadingEl);
-    tab.loadingEl = loadingEl;
+    _showLoading(tab);
     renderTabBar();
   }
   tab.pdfBytes = new Uint8Array(file.buffer);
   await _loadTabContent(tab, false, true);
+}
+
+function _showLoading(tab: Tab) {
+  if (tab.loadingEl) return;
+  const loadingEl = document.createElement('div');
+  loadingEl.className = 'loading-overlay';
+  loadingEl.innerHTML = '<div class="spinner"></div>';
+  tab.pane.appendChild(loadingEl);
+  tab.loadingEl = loadingEl;
+}
+
+// Whether a tab's document comes from a real file it can be re-read from,
+// rather than a virtual one like 'Combined.pdf'.
+function _hasDiskFile(tab: Tab) {
+  return !!tab.filePath && /[\\/]/.test(tab.filePath);
+}
+
+// Show a new version of a tab's document in place of the old one, keeping the
+// tab and its scroll position. Its annotations and undo history belong to the
+// old version, so they go with it. The tab is only switched to when `show`.
+async function _replaceTabContent(tab: Tab, bytes: Uint8Array, show = false) {
+  if (tab.unavailable) {
+    tab.unavailable = null;
+    tab.pane.querySelector('.tab-unavailable')?.remove();
+  }
+  // A sleeping tab is loaded here instead of being woken with its old document.
+  tab.sleeping          = false;
+  tab._savedAnnotations = null;
+  tab._savedScrollTop   = null;
+  tab.pdfBytes          = bytes;
+  tab._undoStack        = undefined;
+  tab._undoIdx          = undefined;
+  tab._undoCleanIdx     = undefined;
+  tab.dirty             = false;
+  finder.invalidateTab(tab);
+  _showLoading(tab);
+  if (show) switchTab(tab);
+  else      renderTabBar();
+  await _loadTabContent(tab, true, true);
+}
+
+// Re-read a tab's document from its file (F5 / tab menu > Refresh).
+async function refreshTab(tab: Tab | null) {
+  if (!tab || !_hasDiskFile(tab)) return;
+  const name = tab.filePath!.split(/[\\/]/).pop();
+  if (tab.dirty) {
+    const choice = await showDialog({
+      title:     'Refresh',
+      message:   `"${name}" has unsaved changes. Refreshing will discard them.`,
+      buttons:   ['Discard and Refresh', 'Cancel'],
+      defaultId: 0,
+      cancelId:  1,
+    });
+    if (choice !== 0) return;
+  }
+  let file: { filePath: string; buffer: ArrayBuffer } | null = null;
+  try { file = await window.api.openFileFromPath(tab.filePath!); } catch { /* treated as missing */ }
+  if (!tabs.includes(tab)) return; // closed while reading
+  if (!file) { _showUnavailable(tab, 'File not found'); return; }
+  await _replaceTabContent(tab, new Uint8Array(file.buffer));
 }
 
 // Grey a tab out with the reason its document can't be shown.
@@ -1147,6 +1205,42 @@ async function _toggleReuseTab() {
   await window.api.setReuseTabSetting(_reuseOpenTab);
 }
 
+function _sameBytes(a: Uint8Array, b: Uint8Array) {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// A document being opened is already showing in `existing`. If it hasn't
+// changed, switch to that tab. If it has (the file was updated since the tab
+// opened it), ask whether to update the tab or open the new version beside it.
+// Returns false when the caller should open it in a new tab.
+async function _showOrUpdateOpenTab(existing: Tab, filePath: string, buffer: ArrayBuffer | Uint8Array) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  // A greyed-out tab re-reads its file when shown, and a restored tab that is
+  // still loading has nothing to compare against yet.
+  if (existing.unavailable || existing.pdfBytes.byteLength === 0 || _sameBytes(existing.pdfBytes, bytes)) {
+    switchTab(existing);
+    return true;
+  }
+  const name   = filePath.split(/[\\/]/).pop();
+  const choice = await showDialog({
+    title:     'File Changed',
+    message:   `"${name}" has changed since it was opened. Update the open tab with the new version, or open it in a new tab?`,
+    buttons:   ['Update Tab', 'Open New Tab', 'Cancel'],
+    defaultId: 0,
+    cancelId:  2,
+  });
+  if (choice === 1) return false;
+  if (!tabs.includes(existing)) return choice === 2; // closed meanwhile: open it fresh
+  if (choice === 0) {
+    existing.filePath = filePath; // a re-download of a web document lands in a new file
+    await _replaceTabContent(existing, bytes, true);
+    updateTitleBar(existing);
+  }
+  return true;
+}
+
 // Return an already-open, unmodified tab for the given file path or source
 // URL, or null.
 function _findOpenTab(filePath: string | null, sourceUrl: string | null = null) {
@@ -1163,23 +1257,16 @@ async function openFile() {
   const results = await window.api.openFileDialog();
   if (!results || results.length === 0) return;
 
-  // Partition results: files that are already open vs genuinely new ones.
-  const newTabs    = [];
-  let   lastExisting = null;
+  // Partition results: files that are already open (shown, or updated if they
+  // have changed) vs genuinely new ones.
+  const newTabs = [];
   for (const { filePath, buffer } of results) {
     const existing = _findOpenTab(filePath);
-    if (existing) {
-      lastExisting = existing;
-      continue; // don't create a duplicate tab
-    }
+    if (existing && await _showOrUpdateOpenTab(existing, filePath, buffer)) continue; // don't create a duplicate tab
     newTabs.push(createTab(filePath, buffer));
   }
 
-  if (newTabs.length === 0) {
-    // Every selected file was already open — just switch to the last one.
-    if (lastExisting) switchTab(lastExisting);
-    return;
-  }
+  if (newTabs.length === 0) return;
 
   // Create all new tabs immediately so they appear in the sidebar straight away.
   renderTabBar();
@@ -1379,10 +1466,10 @@ async function printTab(tab: Tab | null) {
 async function reopenLastTab() {
   if (_closedTabStack.length === 0) return;
   const { filePath } = _closedTabStack.pop()!;
-  const existing = _findOpenTab(filePath);
-  if (existing) { switchTab(existing); return; }
   const result = await window.api.openFileFromPath(filePath);
   if (!result) { alert(`Could not reopen "${filePath.split(/[\\/]/).pop()}": file not found.`); return; }
+  const existing = _findOpenTab(filePath);
+  if (existing && await _showOrUpdateOpenTab(existing, filePath, result.buffer)) return;
   const tab = createTab(result.filePath, result.buffer);
   renderTabBar();
   switchTab(tab);
@@ -1956,6 +2043,7 @@ document.addEventListener('keydown', async (e) => {
   if (ctrl && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoom(0.1); return; }
   if (ctrl && e.key === '-') { e.preventDefault(); zoom(-0.1); return; }
   if (ctrl && e.key === '0') { e.preventDefault(); fitWidth(); return; }
+  if (e.key === 'F5') { e.preventDefault(); refreshTab(activeTab); return; }
   if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
 
   if (ctrl && e.key === 'z') {
@@ -2014,6 +2102,7 @@ const _menuActions = {
   'print':       () => printTab(activeTab),
   'close-tab':   () => { if (activeTab) requestCloseTab(activeTab); },
   'reopen-tab':  () => reopenLastTab(),
+  'refresh':     () => refreshTab(activeTab),
   'quit':        () => window.close(),
   'zoom-50':     () => window.api.setUiZoom(0.5),
   'zoom-75':     () => window.api.setUiZoom(0.75),
@@ -2169,7 +2258,7 @@ inputCtxMenu.addEventListener('mousedown', (e) => {
 // file/URL forwarded here from elsewhere.
 window.api.onOpenFileData(async ({ filePath, buffer, sourceUrl }) => {
   const existing = _findOpenTab(filePath, sourceUrl);
-  if (existing) { switchTab(existing); return; }
+  if (existing && await _showOrUpdateOpenTab(existing, filePath, buffer)) return;
   const tab = createTab(filePath, buffer, sourceUrl);
   renderTabBar();
   switchTab(tab);
