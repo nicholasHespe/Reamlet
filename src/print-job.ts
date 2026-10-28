@@ -29,8 +29,23 @@ export interface PrintJobResult {
   error?: string;
 }
 
+/**
+ * How long a print keeps its settings as the printer's defaults. Chromium takes
+ * them while it sets the job up, well before the job is done, but its
+ * completion callback can't be counted on to say when (see below).
+ */
+const PRINTER_DEFAULTS_HOLD_MS = 10_000;
+
+/**
+ * Put this print's settings on the printer as its defaults, resolving to a
+ * function that gives the printer's own back (see printer-defaults.ts).
+ */
+export type HoldPrinterDefaults = () => Promise<() => Promise<void>>;
+
 /** Send `pdfBytes` to the printer `options.deviceName`. Resolves once the job is on its way. */
-export async function printPdf(pdfBytes: Uint8Array, options: PrintJobOptions): Promise<PrintJobResult> {
+export async function printPdf(
+  pdfBytes: Uint8Array, options: PrintJobOptions, holdDefaults?: HoldPrinterDefaults,
+): Promise<PrintJobResult> {
   const tempDir  = path.join(os.tmpdir(), 'ReamletPrintJobs');
   const tempFile = path.join(tempDir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pdf`);
   let printWin: BrowserWindow | null = null;
@@ -95,6 +110,10 @@ export async function printPdf(pdfBytes: Uint8Array, options: PrintJobOptions): 
     // real downside beyond making the user wait out the window.
     const RESPONSE_TIMEOUT_MS = 2000;
     let printResult: { ok: true } | { ok: false; error: string } | null = null;
+    // The printer's own preferences (tray, media type...) can only reach the job
+    // as the printer's defaults, which print() reads: so they are the defaults
+    // from here until the job has them, and the printer's own go back after.
+    const releaseDefaults = holdDefaults ? await holdDefaults() : null;
     const callbackDone = new Promise<void>(resolve => {
       win.webContents.print(
         {
@@ -118,6 +137,11 @@ export async function printPdf(pdfBytes: Uint8Array, options: PrintJobOptions): 
         }
       );
     });
+    // Neither outcome can leave the printer's defaults held: releasing never throws.
+    if (releaseDefaults) {
+      void Promise.race([callbackDone, new Promise<void>(resolve => setTimeout(resolve, PRINTER_DEFAULTS_HOLD_MS))])
+        .then(releaseDefaults, releaseDefaults);
+    }
 
     await Promise.race([callbackDone, new Promise<void>(resolve => setTimeout(resolve, RESPONSE_TIMEOUT_MS))]);
 

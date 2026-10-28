@@ -110,7 +110,7 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('pdf-data', (_e: unknown, data: { buffer: ArrayBuffer }) => callback(data));
   },
   getPrinters:            () => ipcRenderer.invoke('get-printers'),
-  openPrinterPreferences: (printerName: string) => ipcRenderer.invoke('open-printer-preferences', printerName),
+  openPrinterPreferences: (printerName: string, current: string | null) => ipcRenderer.invoke('open-printer-preferences', printerName, current),
   executePrint: (options: {
     pdfBytes:    ArrayBuffer;
     deviceName:  string;
@@ -121,6 +121,7 @@ contextBridge.exposeInMainWorld('api', {
     scaleFactor: number;
     landscape:   boolean;
     pageSize:    { width: number; height: number }; // microns
+    devMode?:    string | null; // from openPrinterPreferences; applies to this print only
   }) => ipcRenderer.invoke('execute-print', options),
 
   // Initiate a native OS file drag (for dragging into Outlook, Explorer, etc.)

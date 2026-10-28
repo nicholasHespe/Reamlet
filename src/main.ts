@@ -19,6 +19,10 @@ import {
   type Session, type SessionSettings, type WindowSession,
 } from './session';
 import { WebOpenGate, WEB_OPEN_LIMIT, WEB_OPEN_QUIET_MS, describeFailures } from './web-opens';
+import {
+  PrinterDefaults, fileJournal, windowsDefaultsStore, askPrinterPreferences, isDevMode,
+  type DevMode, type PreferencesResult,
+} from './printer-defaults';
 
 // ── Window factory ─────────────────────────────────────────────
 
@@ -262,17 +266,30 @@ ipcMain.handle('get-printers', async (event: IpcMainInvokeEvent) => {
   return event.sender.getPrintersAsync();
 });
 
-// Open the Windows printer preferences dialog for the given printer
-ipcMain.handle('open-printer-preferences', async (event: IpcMainInvokeEvent, printerName: string) => {
+// Settings a print has put on a printer for its own length, and the previous
+// ones to give back (see printer-defaults.ts for why they go through the
+// printer's defaults at all).
+let printerDefaults: PrinterDefaults | null = null;
+function getPrinterDefaults(): PrinterDefaults {
+  printerDefaults ??= new PrinterDefaults(
+    windowsDefaultsStore,
+    fileJournal(path.join(app.getPath('userData'), 'printer-defaults-pending.json')),
+  );
+  return printerDefaults;
+}
+
+// Show the printer driver's own preferences dialog for the given printer and
+// hand back what the user chose, for the renderer to pass to execute-print.
+// Nothing is saved to the printer: that is what the Printers control panel's
+// dialog (`printui.dll /e`) did, and why one pick of a label tray used to stick.
+ipcMain.handle('open-printer-preferences', async (
+  event: IpcMainInvokeEvent, printerName: string, current: DevMode | null,
+): Promise<PreferencesResult> => {
+  if (process.platform !== 'win32') return { ok: false, error: 'Printer preferences are only available on Windows.' };
   const printers = await event.sender.getPrintersAsync();
   const valid = printers.some((p: { name: string }) => p.name === printerName);
   if (!valid) return { ok: false, error: 'Unknown printer.' };
-  return new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    execFile('rundll32', ['printui.dll,PrintUIEntry', '/e', '/n', printerName], (error: Error | null) => {
-      if (error) resolve({ ok: false, error: error.message });
-      else resolve({ ok: true });
-    });
-  });
+  return askPrinterPreferences(printerName, isDevMode(current) ? current : null);
 });
 
 // Open a visible print preview window where the user can configure and execute printing.
@@ -307,8 +324,16 @@ ipcMain.handle('open-print-preview', async (_event: IpcMainInvokeEvent, filePath
 
 // Execute a silent print (no system dialog) of a PDF built by the preview
 // window; see src/print-job.ts.
-ipcMain.handle('execute-print', (_event: IpcMainInvokeEvent, options: PrintJobOptions & { pdfBytes: ArrayBuffer }): Promise<PrintJobResult> =>
-  printPdf(Buffer.from(options.pdfBytes), options));
+ipcMain.handle('execute-print', (_event: IpcMainInvokeEvent, options: PrintJobOptions & {
+  pdfBytes: ArrayBuffer;
+  devMode?: DevMode | null; // settings picked in the printer's preferences dialog, for this print only
+}): Promise<PrintJobResult> => {
+  if (options.devMode != null && !isDevMode(options.devMode)) {
+    return Promise.resolve({ ok: false, error: 'Invalid printer settings.' });
+  }
+  return printPdf(Buffer.from(options.pdfBytes), options,
+    () => getPrinterDefaults().acquire(options.deviceName, options.devMode ?? null));
+});
 
 // Read / write the extension ID in the native messaging host manifest.
 // The manifest lives next to the Reamlet exe (installed and portable builds).
@@ -788,6 +813,8 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    // A print that was cut off may have left a printer's settings as its own.
+    getPrinterDefaults().recover().catch((err: unknown) => console.error('Could not restore printer defaults:', err));
     restoreExtensionIdToManifest();
     restoreThemeSource();
     cleanupAllDownloads();

@@ -58,7 +58,9 @@ interface Window {
     openPrintPreview:       (filePath: string)                                         => Promise<{ ok: boolean; error?: string }>;
     onPdfData:              (callback: (data: { buffer: ArrayBuffer }) => void)        => void;
     getPrinters:            ()                                                          => Promise<{ name: string; isDefault: boolean }[]>;
-    openPrinterPreferences: (printerName: string)                                      => Promise<{ ok: boolean; error?: string }>;
+    openPrinterPreferences: (printerName: string, current: string | null)              => Promise<
+      { ok: true; devMode: string } | { ok: true; cancelled: true } | { ok: false; error: string }
+    >;
     executePrint: (options: {
       pdfBytes:    ArrayBuffer;
       deviceName:  string;
@@ -69,6 +71,7 @@ interface Window {
       scaleFactor: number;
       landscape:   boolean;
       pageSize:    { width: number; height: number }; // microns
+      devMode?:    string | null; // from openPrinterPreferences; applies to this print only
     }) => Promise<{ ok: boolean; error?: string }>;
     startDrag: (filePath: string) => void;
     setUiZoom: (factor: number) => void;
