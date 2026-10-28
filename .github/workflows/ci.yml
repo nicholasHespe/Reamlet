@@ -126,6 +126,97 @@ jobs:
         run: pnpm test
 
   # ──────────────────────────────
+  #  Printing
+  # ──────────────────────────────
+  # The tests above check the print job Reamlet builds. This prints real jobs
+  # through the app's own print path to a PDF printer, then checks that the
+  # pages which come out show what was sent. A blank printout fails here
+  # whether the job, Electron or the OS print pipeline blanked it.
+  print:
+    name: Print (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            pnpm-store: ~/.local/share/pnpm/store
+          - name: Windows
+            os: windows-latest
+            pnpm-store: ~/AppData/Local/pnpm/store
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.pnpm-store }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile TypeScript
+        run: pnpm run build
+
+      # CUPS-PDF writes each job to ~/PDF.
+      - name: Add a PDF printer (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cups printer-driver-cups-pdf xvfb
+          sudo lpadmin -p ReamletTestPDF -v cups-pdf:/ -m lsb/usr/cups-pdf/CUPS-PDF_opt.ppd -E
+          echo "REAMLET_TEST_PRINTER=ReamletTestPDF" >> "$GITHUB_ENV"
+          echo "REAMLET_TEST_PRINT_OUTPUT=$HOME/PDF" >> "$GITHUB_ENV"
+
+      # Microsoft Print to PDF asks where to save unless its port is a file,
+      # so this printer's port is one.
+      - name: Add a PDF printer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'printed'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $port = Join-Path $out 'printout.pdf'
+          Add-PrinterPort -Name $port
+          Add-Printer -Name 'ReamletTestPDF' -DriverName 'Microsoft Print To PDF' -PortName $port
+          "REAMLET_TEST_PRINTER=ReamletTestPDF" >> $env:GITHUB_ENV
+          "REAMLET_TEST_PRINT_OUTPUT=$out" >> $env:GITHUB_ENV
+
+      - name: Print through Reamlet (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm exec electron --no-sandbox test/e2e/print.mjs
+        env:
+          REAMLET_TEST_PRINT_RESULTS: ${{ runner.temp }}/print-results
+
+      - name: Print through Reamlet (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm exec electron test/e2e/print.mjs
+        env:
+          REAMLET_TEST_PRINT_RESULTS: ${{ runner.temp }}/print-results
+
+      # Each job as sent and as printed, to look at when a layout fails.
+      - name: Upload print results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: print-results-${{ matrix.name }}
+          path: ${{ runner.temp }}/print-results
+          retention-days: 7
+
+  # ──────────────────────────────
   #  Build 
   # ──────────────────────────────
 
