@@ -136,6 +136,71 @@ export function referencedFiles(...sessions: Session[]): Set<string> {
 }
 
 /**
+ * `fileName` made safe to save on Windows: no directory part, no reserved
+ * characters or device names, and always ending in .pdf.
+ */
+export function safePdfName(fileName: string): string {
+  let name = (fileName.split(/[\\/]/).pop() ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[<>:"|?*\x00-\x1f]/g, '_')
+    .replace(/[. ]+$/, '')
+    .trim();
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(name)) name = '_' + name;
+  if (!name.toLowerCase().endsWith('.pdf')) name = (name || 'download') + '.pdf';
+  if (name.length > 200) name = name.slice(0, 196) + '.pdf';
+  return name;
+}
+
+/**
+ * The name a downloaded PDF should be saved under: the server's
+ * Content-Disposition filename (filename* first, then filename), else the
+ * last segment of the URL's path.
+ */
+export function pdfFileName(contentDisposition: string | null | undefined, url: string): string {
+  const cd = contentDisposition ?? '';
+  let name = '';
+  const encoded = /filename\*\s*=\s*[\w-]+'[^']*'([^;]+)/i.exec(cd);
+  if (encoded) {
+    try { name = decodeURIComponent(encoded[1].trim()); } catch { /* malformed */ }
+  }
+  if (!name) {
+    const plain = /filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;]+))/i.exec(cd);
+    if (plain) name = (plain[1]?.replace(/\\(.)/g, '$1') ?? plain[2]).trim();
+  }
+  if (!name) {
+    let segment = '';
+    try { segment = new URL(url).pathname.split('/').pop() ?? ''; } catch { /* not a URL */ }
+    try { name = decodeURIComponent(segment); } catch { name = segment; }
+  }
+  return safePdfName(name);
+}
+
+/** The first of `name.ext`, `name (2).ext`, `name (3).ext`, … not taken in `dir`. */
+export function uniquePath(dir: string, fileName: string): string {
+  const { name, ext } = path.parse(fileName);
+  let dest = path.join(dir, fileName);
+  for (let n = 2; fs.existsSync(dest); n++) dest = path.join(dir, `${name} (${n})${ext}`);
+  return dest;
+}
+
+/**
+ * Create an empty file in `dir` named like uniquePath() and return its path.
+ * Creating it claims the name, so two downloads can't pick the same one.
+ */
+export function createUniqueFile(dir: string, fileName: string): string {
+  const { name, ext } = path.parse(fileName);
+  for (let n = 1; ; n++) {
+    const dest = path.join(dir, n === 1 ? fileName : `${name} (${n})${ext}`);
+    try {
+      fs.closeSync(fs.openSync(dest, 'wx'));
+      return dest;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
+}
+
+/**
  * Move a file out of the temporary `inboxDir`, where downloads arrive, into
  * the durable `downloadsDir`, so the OS's temp-folder cleanup can't take a
  * document that a tab still has open. Files outside the inbox are returned
@@ -145,9 +210,7 @@ export function adoptDownload(filePath: string, inboxDir: string, downloadsDir: 
   if (!isInside(filePath, inboxDir)) return filePath;
   try {
     fs.mkdirSync(downloadsDir, { recursive: true });
-    const { name, ext } = path.parse(filePath);
-    let dest = path.join(downloadsDir, name + ext);
-    for (let n = 2; fs.existsSync(dest); n++) dest = path.join(downloadsDir, `${name} (${n})${ext}`);
+    const dest = uniquePath(downloadsDir, path.basename(filePath));
     try {
       fs.renameSync(filePath, dest);
     } catch {

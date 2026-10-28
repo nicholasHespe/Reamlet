@@ -96,13 +96,44 @@ function isLocalPath(s) {
   return /^[A-Za-z]:\\/.test(s) || s.startsWith('\\\\');
 }
 
-// Move a file into %TEMP%\ReamletDownloads, returning the new path.
-// Falls back to the original path on any error.
+const INBOX = path.join(os.tmpdir(), 'ReamletDownloads');
+
+// A filename from the extension, made safe to save on Windows: no directory
+// part, no reserved characters or device names, and always ending in .pdf.
+// Keep in step with safePdfName() in src/session.ts.
+function safePdfName(fileName) {
+  let name = (String(fileName ?? '').split(/[\\/]/).pop() ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[<>:"|?*\x00-\x1f]/g, '_')
+    .replace(/[. ]+$/, '')
+    .trim();
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(name)) name = '_' + name;
+  if (!name.toLowerCase().endsWith('.pdf')) name = (name || 'download') + '.pdf';
+  if (name.length > 200) name = name.slice(0, 196) + '.pdf';
+  return name;
+}
+
+// Create an empty file in the inbox under fileName, or `name (2).pdf`,
+// `name (3).pdf`, … if that is taken, and return its path.
+function createInboxFile(fileName) {
+  fs.mkdirSync(INBOX, { recursive: true });
+  const { name, ext } = path.parse(fileName);
+  for (let n = 1; ; n++) {
+    const dest = path.join(INBOX, n === 1 ? fileName : `${name} (${n})${ext}`);
+    try {
+      fs.closeSync(fs.openSync(dest, 'wx'));
+      return dest;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    }
+  }
+}
+
+// Move a file into %TEMP%\ReamletDownloads under its own name, returning the
+// new path. Falls back to the original path on any error.
 function moveToTemp(filePath) {
   try {
-    const tempDir = path.join(os.tmpdir(), 'ReamletDownloads');
-    fs.mkdirSync(tempDir, { recursive: true });
-    const dest = path.join(tempDir, path.basename(filePath));
+    const dest = createInboxFile(path.basename(filePath));
     fs.renameSync(filePath, dest);
     return dest;
   } catch {
@@ -113,7 +144,7 @@ function moveToTemp(filePath) {
 // ── Message handler ───────────────────────────────────────────
 
 function handleMessage(msg) {
-  const { url, bytes, background } = msg;
+  const { url, bytes, filename, background } = msg;
 
   const { found: reamletPath, checked } = findReamlet();
   if (!reamletPath) {
@@ -122,12 +153,11 @@ function handleMessage(msg) {
   }
 
   // bytes message: extension fetched the PDF directly and sent the raw bytes
-  // as base64 (used when chrome.downloads fails with SERVER_BAD_CONTENT).
+  // as base64, with the name the server gave the file (older extensions
+  // don't send one).
   if (bytes) {
     try {
-      const tempDir = path.join(os.tmpdir(), 'ReamletDownloads');
-      fs.mkdirSync(tempDir, { recursive: true });
-      const tempPath = path.join(tempDir, `${Date.now()}.pdf`);
+      const tempPath = createInboxFile(safePdfName(filename));
       fs.writeFileSync(tempPath, Buffer.from(bytes, 'base64'));
       const args = background ? [tempPath, '--background'] : [tempPath];
       const child = spawn(reamletPath, args, { detached: true, stdio: 'ignore' });
