@@ -3,7 +3,7 @@
 //
 // Builds the PDF that is actually handed to the OS print pipeline. Sheets
 // (single page, N-up grids, booklet spreads) are composited with pdf-lib,
-// embedding source pages as vector XObjects via embedPdf/drawPage, rather
+// embedding source pages as vector XObjects via embedPages/drawPage, rather
 // than rasterizing them through <canvas> first. That keeps fine detail —
 // barcodes, small type — intact at whatever resolution the printer itself
 // uses, instead of baking it in at a fixed, low DPI before the OS ever sees
@@ -80,10 +80,11 @@ export interface BuildPrintPdfResult {
 /**
  * Build the print-ready PDF: one page per physical sheet, laid out per
  * pageRange/pps/isBooklet, sized to `mediaWpt`x`mediaHpt`. A sheet wider than
- * it is tall (landscape orientation, or booklet's 2-up spreads) is rotated
- * onto portrait paper here — the physical stock printers actually carry —
- * rather than asking the driver to rotate it (see print-preview.ts's btnPrint
- * handler for why the driver can't be relied on for that).
+ * it is tall (landscape orientation, or booklet's 2-up spreads) is drawn a
+ * quarter turn clockwise onto portrait paper — the physical stock printers
+ * actually carry — rather than asking the driver to rotate it (see
+ * print-preview.ts's btnPrint handler for why the driver can't be relied on
+ * for that).
  */
 export async function buildPrintPdf(srcBytes: Uint8Array, params: BuildPrintPdfParams): Promise<BuildPrintPdfResult> {
   const { totalPages, pageRange, isBooklet, paperW, paperH } = params;
@@ -93,7 +94,7 @@ export async function buildPrintPdf(srcBytes: Uint8Array, params: BuildPrintPdfP
 
   const sheetW = paperW * (isBooklet ? 2 : 1);
   const sheetH = paperH;
-  const needsRotate = sheetW > sheetH;
+  const turned = sheetW > sheetH;
   const mediaWpt = Math.min(sheetW, sheetH);
   const mediaHpt = Math.max(sheetW, sheetH);
 
@@ -126,8 +127,8 @@ export async function buildPrintPdf(srcBytes: Uint8Array, params: BuildPrintPdfP
   const neededIdx = new Set<number>();
   for (const sheet of sheets) for (const p of sheet.slots) if (p >= 1 && p <= totalPages) neededIdx.add(p - 1);
 
-  const naturalDoc = await PDFDocument.create();
-  const font = await naturalDoc.embedFont(StandardFonts.Helvetica);
+  const doc  = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
 
   const printPages = new Map<number, PrintPage>();
   if (neededIdx.size > 0) {
@@ -138,7 +139,7 @@ export async function buildPrintPdf(srcBytes: Uint8Array, params: BuildPrintPdfP
       const box = visibleBox(p);
       return { left: box.x, bottom: box.y, right: box.x + box.width, top: box.y + box.height };
     });
-    const embeds = await naturalDoc.embedPages(srcPages, boxes);
+    const embeds = await doc.embedPages(srcPages, boxes);
     [...neededIdx].forEach((idx, i) => printPages.set(idx + 1, {
       embedded: embeds[i],
       rotation: (((Math.round(srcPages[i].getRotation().angle / 90) * 90) % 360 + 360) % 360) as PrintPage['rotation'],
@@ -184,33 +185,19 @@ export async function buildPrintPdf(srcBytes: Uint8Array, params: BuildPrintPdfP
 
   for (const sheet of sheets) {
     const rows = Math.ceil(sheet.slots.length / sheet.cols);
-    const page = naturalDoc.addPage([sheetW, sheetH]);
+    const page = doc.addPage([mediaWpt, mediaHpt]);
+    // Lay the sheet out in its own upright coordinates; a turned sheet's top
+    // edge runs down the paper's left edge.
+    if (turned) page.pushOperators(pushGraphicsState(), concatTransformationMatrix(0, 1, -1, 0, mediaWpt, 0));
     const slotW = sheetW / sheet.cols, slotH = sheetH / rows;
     sheet.slots.forEach((pageNum, i) => {
       const col = i % sheet.cols, row = Math.floor(i / sheet.cols);
       drawSlot(page, pageNum, col * slotW, sheetH - (row + 1) * slotH, slotW, slotH);
     });
+    if (turned) page.pushOperators(popGraphicsState());
   }
 
-  if (!needsRotate) {
-    return { bytes: await naturalDoc.save(), mediaWpt, mediaHpt };
-  }
-
-  // Rotate each natural (landscape) sheet 90° clockwise onto portrait paper —
-  // see the comment above and print-preview.css's now-removed .rotate-sheet
-  // for the on-screen-print approach this replaces. Verified empirically:
-  // rotate 90° (pdf-lib's counterclockwise-positive convention) anchored at
-  // (mediaW, 0) maps the natural sheet's top edge onto portrait paper's left
-  // edge — "the sheet is turned clockwise to read it", matching prior behaviour.
-  const finalDoc = await PDFDocument.create();
-  const naturalPageCount = naturalDoc.getPageCount();
-  const rotatedEmbeds = naturalPageCount > 0 ? await finalDoc.embedPdf(naturalDoc, [...Array(naturalPageCount).keys()]) : [];
-  for (const embedded of rotatedEmbeds) {
-    const page = finalDoc.addPage([mediaWpt, mediaHpt]);
-    page.drawPage(embedded, { x: mediaWpt, y: 0, rotate: degrees(90) });
-  }
-
-  return { bytes: await finalDoc.save(), mediaWpt, mediaHpt };
+  return { bytes: await doc.save(), mediaWpt, mediaHpt };
 }
 
 // ── Annotations ───────────────────────────────────────────────

@@ -6,5 +6,5 @@
     "lib": ["ES2020"],
     "types": ["node"]
   },
-  "include": ["src/main.ts", "src/preload.ts", "src/session.ts"]
+  "include": ["src/main.ts", "src/preload.ts", "src/session.ts", "src/web-opens.ts", "src/print-job.ts", "src/printer-defaults.ts", "src/printer-rules.ts"]
 }

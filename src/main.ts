@@ -12,11 +12,18 @@ const fs    = require('fs');
 const os    = require('os');
 const https = require('https');
 
+import { printPdf, type PrintJobOptions, type PrintJobResult } from './print-job';
 import {
   readSession, writeSession, toWindowSession, shouldRestore, afterUserClose,
-  referencedFiles, adoptDownload, cleanupDownloads,
+  referencedFiles, adoptDownload, cleanupDownloads, pdfFileName, createUniqueFile,
   type Session, type SessionSettings, type WindowSession,
 } from './session';
+import { WebOpenGate, WEB_OPEN_LIMIT, WEB_OPEN_QUIET_MS, describeFailures } from './web-opens';
+import {
+  PrinterDefaults, fileJournal, windowsDefaultsStore, askPrinterPreferences, isDevMode,
+  type DevMode, type PreferencesResult,
+} from './printer-defaults';
+import { sanitizeRules, findRule, MM_PER_POINT, type PrinterRule } from './printer-rules';
 
 // ── Window factory ─────────────────────────────────────────────
 
@@ -260,17 +267,30 @@ ipcMain.handle('get-printers', async (event: IpcMainInvokeEvent) => {
   return event.sender.getPrintersAsync();
 });
 
-// Open the Windows printer preferences dialog for the given printer
-ipcMain.handle('open-printer-preferences', async (event: IpcMainInvokeEvent, printerName: string) => {
+// Settings a print has put on a printer for its own length, and the previous
+// ones to give back (see printer-defaults.ts for why they go through the
+// printer's defaults at all).
+let printerDefaults: PrinterDefaults | null = null;
+function getPrinterDefaults(): PrinterDefaults {
+  printerDefaults ??= new PrinterDefaults(
+    windowsDefaultsStore,
+    fileJournal(path.join(app.getPath('userData'), 'printer-defaults-pending.json')),
+  );
+  return printerDefaults;
+}
+
+// Show the printer driver's own preferences dialog for the given printer and
+// hand back what the user chose, for the renderer to pass to execute-print.
+// Nothing is saved to the printer: that is what the Printers control panel's
+// dialog (`printui.dll /e`) did, and why one pick of a label tray used to stick.
+ipcMain.handle('open-printer-preferences', async (
+  event: IpcMainInvokeEvent, printerName: string, current: DevMode | null,
+): Promise<PreferencesResult> => {
+  if (process.platform !== 'win32') return { ok: false, error: 'Printer preferences are only available on Windows.' };
   const printers = await event.sender.getPrintersAsync();
   const valid = printers.some((p: { name: string }) => p.name === printerName);
   if (!valid) return { ok: false, error: 'Unknown printer.' };
-  return new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    execFile('rundll32', ['printui.dll,PrintUIEntry', '/e', '/n', printerName], (error: Error | null) => {
-      if (error) resolve({ ok: false, error: error.message });
-      else resolve({ ok: true });
-    });
-  });
+  return askPrinterPreferences(printerName, isDevMode(current) ? current : null);
 });
 
 // Open a visible print preview window where the user can configure and execute printing.
@@ -303,135 +323,17 @@ ipcMain.handle('open-print-preview', async (_event: IpcMainInvokeEvent, filePath
   }
 });
 
-// Execute a silent print (no system dialog) of a PDF built by the preview window.
-//
-// The PDF is loaded into Chromium's own native PDF viewer (a real, separate
-// BrowserWindow) rather than printing the calling window's own HTML. That
-// viewer renders vector PDF content directly, so printed output keeps full
-// fidelity at whatever resolution the printer uses, instead of the fixed,
-// low-DPI raster a <canvas>/<img>-based print previously baked in (see
-// src/renderer/print-compose.ts for where that PDF is built).
-ipcMain.handle('execute-print', async (_event: IpcMainInvokeEvent, options: {
-  pdfBytes:    ArrayBuffer;
-  deviceName:  string;
-  copies:      number;
-  color:       boolean;
-  collate:     boolean;
-  duplexMode:  'simplex' | 'longEdge' | 'shortEdge';
-  scaleFactor: number;
-  landscape:   boolean;
-  pageSize:    { width: number; height: number }; // microns
-}): Promise<{ ok: boolean; error?: string }> => {
-  const tempDir  = path.join(os.tmpdir(), 'ReamletPrintJobs');
-  const tempFile = path.join(tempDir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.pdf`);
-  let printWin: BW | null = null;
-  try {
-    fs.mkdirSync(tempDir, { recursive: true });
-    fs.writeFileSync(tempFile, Buffer.from(options.pdfBytes));
-
-    const win = new BrowserWindow({
-      show: false, // never shown — see backgroundThrottling below for why this doesn't blank the print output
-      skipTaskbar: true,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        // Enables Chromium's built-in (PDFium) PDF viewer for the load below.
-        plugins: true,
-        // Chromium normally throttles/skips rendering work for a backgrounded
-        // (never-shown) page, which is why an earlier version of this code had
-        // to actually show the window to get the PDF viewer to render at all —
-        // at the cost of flashing Chromium's own PDF viewer chrome (with its
-        // own print button) on screen. Disabling backgroundThrottling keeps
-        // frames rendering normally while the window stays fully hidden,
-        // which is the documented purpose of this option (see Electron's
-        // BrowserWindowConstructorOptions.webPreferences.backgroundThrottling).
-        backgroundThrottling: false,
-      },
-    });
-    printWin = win;
-
-    // The built-in PDF viewer sets the window title to the document's name once
-    // it has finished loading and laying out the PDF; page-title-updated is a
-    // more reliable "ready to print" signal than did-finish-load (which fires
-    // once the viewer *shell* loads, before the PDF itself has rendered). A
-    // fallback timeout guards against PDFs that never trigger the title update.
-    const readyPromise = new Promise<void>(resolve => {
-      let done = false;
-      const finish = () => { if (!done) { done = true; resolve(); } };
-      const timer = setTimeout(finish, 3000);
-      win.webContents.once('page-title-updated', () => { clearTimeout(timer); finish(); });
-    });
-
-    await win.loadURL('file:///' + tempFile.replace(/\\/g, '/'));
-    await readyPromise;
-
-    // webContents.print()'s completion callback is unreliable on Windows for
-    // at least some printer/driver combinations: confirmed by testing against
-    // a real network printer, where a job that printed correctly never called
-    // back at all (waited 90+ seconds). Genuine failures — an unknown device
-    // name, a driver rejecting the job outright — do call back, and quickly
-    // (well under a second in testing). So the callback is trustworthy for
-    // fast failures but not for slow-or-missing success, meaning we can't
-    // just await it directly without hanging on exactly the printers that work.
-    //
-    // Tried watching the Windows print spooler (via a WMI event subscription)
-    // for the job to actually appear, as a real signal instead of a guess —
-    // reliable in isolated testing, but not in practice: it depends on a
-    // freshly spawned PowerShell process reaching a ready state fast enough
-    // to catch a job that a quick printer can spool and clear in well under a
-    // second, and PowerShell's own startup time turned out to be highly
-    // variable (measured 1-5+ seconds), even when kept warm across prints. A
-    // flat timeout is simpler, has no OS-specific moving parts, and — once
-    // the window/temp-file cleanup below was decoupled from it — carries no
-    // real downside beyond making the user wait out the window.
-    const RESPONSE_TIMEOUT_MS = 2000;
-    let printResult: { ok: true } | { ok: false; error: string } | null = null;
-    const callbackDone = new Promise<void>(resolve => {
-      win.webContents.print(
-        {
-          silent:      true,
-          deviceName:  options.deviceName,
-          copies:      options.copies,
-          color:       options.color,
-          collate:     options.collate,
-          duplexMode:  options.duplexMode,
-          scaleFactor: options.scaleFactor,
-          landscape:   options.landscape,
-          // Without an explicit pageSize the printer's own default paper size is
-          // used (often mismatched with the source PDF), and the print job's
-          // content — sized in physical units to match — can end up taller
-          // than the printer's chosen page, spilling onto an extra blank page.
-          pageSize:    options.pageSize,
-        },
-        (ok: boolean, errorType: string) => {
-          printResult = ok ? { ok: true } : { ok: false, error: errorType };
-          resolve();
-        }
-      );
-    });
-
-    await Promise.race([callbackDone, new Promise<void>(resolve => setTimeout(resolve, RESPONSE_TIMEOUT_MS))]);
-
-    // Don't tear down the window/temp file the instant the response goes out —
-    // if the callback hasn't fired yet, the job may still be spooling from it,
-    // and destroying the window mid-transfer reports (and may cause) a failure
-    // even though the print itself completes fine. Let it finish in the
-    // background, bounded so a job that genuinely never calls back doesn't
-    // leak the window/temp file forever.
-    void (async () => {
-      await Promise.race([callbackDone, new Promise<void>(resolve => setTimeout(resolve, 120_000))]);
-      win.destroy();
-      try { fs.unlinkSync(tempFile); } catch { /* already gone */ }
-    })();
-    printWin = null; // ownership of cleanup moved to the background task above
-
-    return printResult ?? { ok: true };
-  } catch (err) {
-    return { ok: false, error: (err as Error).message };
-  } finally {
-    printWin?.destroy();
-    if (printWin) { try { fs.unlinkSync(tempFile); } catch { /* already gone */ } }
+// Execute a silent print (no system dialog) of a PDF built by the preview
+// window; see src/print-job.ts.
+ipcMain.handle('execute-print', (_event: IpcMainInvokeEvent, options: PrintJobOptions & {
+  pdfBytes: ArrayBuffer;
+  devMode?: DevMode | null; // settings picked in the printer's preferences dialog, for this print only
+}): Promise<PrintJobResult> => {
+  if (options.devMode != null && !isDevMode(options.devMode)) {
+    return Promise.resolve({ ok: false, error: 'Invalid printer settings.' });
   }
+  return printPdf(Buffer.from(options.pdfBytes), options,
+    () => getPrinterDefaults().acquire(options.deviceName, options.devMode ?? null));
 });
 
 // Read / write the extension ID in the native messaging host manifest.
@@ -556,6 +458,26 @@ function restoreThemeSource(): void {
 function effectiveTheme(): 'light' | 'dark' {
   return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
 }
+
+// ── Printer by page size ────────────────────────────────────────────────
+
+function printerRules(): PrinterRule[] {
+  return sanitizeRules(readUserDataSettings().printerRules);
+}
+
+ipcMain.handle('get-printer-rules', () => printerRules());
+
+ipcMain.handle('set-printer-rules', (_event: IpcMainInvokeEvent, rules: unknown) => {
+  const settings = readUserDataSettings();
+  settings.printerRules = sanitizeRules(rules);
+  writeUserDataSettings(settings);
+  return printerRules();
+});
+
+// The printer set for pages of this size (PDF points), or null for none.
+ipcMain.handle('printer-for-page-size', (_event: IpcMainInvokeEvent, widthPt: number, heightPt: number): string | null => {
+  return findRule(printerRules(), widthPt * MM_PER_POINT, heightPt * MM_PER_POINT)?.printer ?? null;
+});
 
 // ── "Switch to already-open tab" setting ─────────────────────────
 
@@ -764,17 +686,14 @@ function downloadPdf(url: string, redirectsLeft = 5): Promise<string> {
         return;
       }
 
-      let baseName: string;
+      // Keep the server's name for the file, numbered (2), (3), … if taken.
+      let filePath: string;
       try {
-        const base = path.basename(new URL(url).pathname) || 'download';
-        baseName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
-      } catch {
-        baseName = 'download.pdf';
+        filePath = createUniqueFile(dir, pdfFileName(res.headers['content-disposition'], url));
+      } catch (err) {
+        reject(err);
+        return;
       }
-      // Prefix with a random token to prevent concurrent downloads of the same
-      // URL from racing to write the same temp file.
-      const token    = Math.random().toString(36).slice(2, 10);
-      const filePath = path.join(dir, `${token}-${baseName}`);
       const fileStream = fs.createWriteStream(filePath);
       res.pipe(fileStream);
       fileStream.on('finish', () => {
@@ -802,20 +721,65 @@ function downloadPdf(url: string, redirectsLeft = 5): Promise<string> {
   });
 }
 
+// ── Floods of web addresses ────────────────────────────────────
+//
+// If the browser extension replays old downloads, Reamlet is launched with
+// hundreds of web addresses in a row (#108). Only the first few get through;
+// the rest are skipped without raising the window, and reported once the flood
+// is over. Local files are never limited: Explorer opens a selection of many
+// PDFs the same way, one launch each.
+
+const _webOpenGate = new WebOpenGate();
+let _floodReportTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Whether a request to open `target` should go ahead; a skipped one is counted for the flood report. */
+function admitOpenRequest(target: string | null): boolean {
+  if (!target || !isHttpUrl(target)) return true;
+  if (_webOpenGate.admit()) return true;
+  // Report when requests have stopped for the quiet period, not while they still arrive.
+  if (_floodReportTimer) clearTimeout(_floodReportTimer);
+  _floodReportTimer = setTimeout(reportSkippedOpens, WEB_OPEN_QUIET_MS + 500);
+  return false;
+}
+
+function reportSkippedOpens(): void {
+  _floodReportTimer = null;
+  const skipped = _webOpenGate.takeSkipped();
+  if (skipped === 0) return;
+  dialog.showMessageBox({
+    type:    'warning',
+    title:   'Reamlet — Too many PDFs from the web at once',
+    message: `Reamlet opened the first ${WEB_OPEN_LIMIT} PDFs from the web and skipped ${skipped} more that arrived straight after.`,
+    detail:  'If you did not ask for these, the Reamlet browser extension may be reopening old downloads. ' +
+             'Turn it off from its toolbar popup until it is updated.',
+    buttons: ['OK'],
+  });
+}
+
+// Web addresses that couldn't be opened are reported together, so a run of
+// failures is one dialog rather than one each.
+const FAILURE_REPORT_DELAY_MS = 1000;
+let _openFailures: string[] = [];
+let _failureReportTimer: ReturnType<typeof setTimeout> | null = null;
+
+function reportOpenFailure(reason: string): void {
+  _openFailures.push(reason);
+  if (_failureReportTimer) return;
+  _failureReportTimer = setTimeout(() => {
+    const { title, message } = describeFailures(_openFailures);
+    _openFailures = [];
+    _failureReportTimer = null;
+    dialog.showMessageBox({ type: 'error', title, message, buttons: ['OK'] });
+  }, FAILURE_REPORT_DELAY_MS);
+}
+
 // Resolve a target (URL or local path) to a local file path ready for opening.
 async function resolveTarget(target: string): Promise<OpenTarget | null> {
   if (isHttpUrl(target)) {
     try {
-      const filePath = await downloadPdf(target);
-      dialog.showMessageBox({
-        type:    'info',
-        title:   'Reamlet — Download complete',
-        message: `Downloaded to:\n${filePath}`,
-        buttons: ['OK'],
-      });
-      return { filePath, sourceUrl: target };
+      return { filePath: await downloadPdf(target), sourceUrl: target };
     } catch (err) {
-      dialog.showErrorBox('Reamlet — Could not open URL', (err as Error).message ?? 'Download failed.');
+      reportOpenFailure((err as Error).message || 'Download failed.');
       return null;
     }
   }
@@ -845,6 +809,7 @@ if (!gotLock) {
   app.on('second-instance', async (_event: ElectronEvent, argv: string[]) => {
     const target     = getArgvTarget(argv);
     const background = argv.includes('--background');
+    if (!admitOpenRequest(target)) return; // part of a flood: don't even raise the window
     // Find the existing window, bring it forward, and open the file as a new tab
     const wins = BrowserWindow.getAllWindows();
     const win  = wins[0];
@@ -869,13 +834,15 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    // A print that was cut off may have left a printer's settings as its own.
+    getPrinterDefaults().recover().catch((err: unknown) => console.error('Could not restore printer defaults:', err));
     restoreExtensionIdToManifest();
     restoreThemeSource();
     cleanupAllDownloads();
     setInterval(cleanupAllDownloads, 60 * 60 * 1000);
     const pendingTarget = _pendingOpenFile || getArgvTarget(process.argv);
     _pendingOpenFile = null;
-    const openTarget  = pendingTarget ? await resolveTarget(pendingTarget) : null;
+    const openTarget  = pendingTarget && admitOpenRequest(pendingTarget) ? await resolveTarget(pendingTarget) : null;
     const background  = process.argv.includes('--background');
     openStartupWindows(openTarget, background);
     buildMenu();
