@@ -14,7 +14,7 @@ details remembered here.
 
 1. **The UI thread never does PDF work.** It lays out, handles input and draws
    what it already has. Parsing, rendering, text extraction, searching, saving,
-   printing and downloading all happen elsewhere and report back by message.
+   and printing all happen elsewhere and report back by message.
 2. **Never show blank.** Whatever the user scrolls or zooms to, something
    correct-looking is on screen within one frame — a lower-resolution or
    previously rendered image scaled by the GPU — and is replaced by sharp
@@ -55,6 +55,7 @@ the following is to be reproduced; the stated replacement covers the need.
 | Printing by building an intermediate PDF, loading it in a hidden browser window, waiting on title changes and fixed time-outs | Direct GDI print job (§9) |
 | Temporarily overwriting the printer's saved defaults for the length of a print, with a crash-recovery journal | A per-job `DEVMODE` passed to the job (§9) |
 | Shelling out to PowerShell (clipboard, printer settings); `.bat` registration scripts | Direct Win32 calls; subcommands of the executable |
+| The app downloading PDFs itself from a web address handed over by the browser (no logins, second fetch, PDF lost on failure); a user-entered extension ID | The browser downloads; the app receives a finished file and answers with a real result (`03` §4) |
 | Tab moves between windows via file path, a 500 ms timer and a "discard changes?" prompt | A tab is a value moved between windows of one process |
 | Whole files copied between processes; defensive buffer copies | One shared, reference-counted byte buffer per source |
 | A bundled JavaScript runtime as the browser helper | A small native executable |
@@ -73,7 +74,6 @@ the following is to be reproduced; the stated replacement covers the need.
 | PDF write | **lopdf** for object-level edits and page import; our own small content-stream and annotation writer | Full control over exactly what is written; pure Rust. |
 | Fonts | `ttf-parser` for metrics, `subsetter` (or equivalent) for subsetting; Liberation Sans Regular/Bold embedded in the executable | Same metrics on screen and in files. |
 | Windows APIs | `windows` crate | Printing, drag-and-drop, clipboard, registry, spell-check, single-instance pipe. |
-| HTTPS | A small blocking client using the system TLS stack, proxy and certificates (WinHTTP via `windows`, or `ureq` with native TLS) | No bundled TLS stack; honours corporate proxies. |
 | Serialisation | `serde` + `serde_json` | Settings and session files. |
 | Errors/logging | `thiserror` in libraries, `anyhow` at the edges, `tracing` to a rotating file in the data folder | |
 
@@ -202,7 +202,7 @@ uploaded as textures with a per-frame upload budget (so a burst of tiles cannot
 cause a long frame); the UI is woken to repaint when results arrive.
 
 CPU-only work that does not need the engine (search matching, materialising,
-downloads, font subsetting) runs on a small worker pool.
+font subsetting) runs on a small worker pool.
 
 ### 5.4 Overlay
 Unsaved annotations, selection outlines, find highlights, text selection, the
@@ -255,7 +255,7 @@ App
 4. In parallel, off the UI thread: start the engine thread (load PDFium), start
    the pipe server, read the first document's bytes.
 5. First document's first-page base image, then tiles.
-6. Deferred to idle: downloads clean-up sweep, extension-manifest check, other
+6. Deferred to idle: clean-up sweep of old browser-received files, other
    restored tabs stay *Placeholder* until activated.
 
 Nothing in steps 1–3 may touch the network, the printer subsystem, the spell
@@ -279,6 +279,7 @@ reamlet/                     workspace
 │  │                         talks to engine/platform through traits         (S03…)
 │  ├─ reamlet-app            the executable `Reamlet.exe`: wiring, start-up  (S03)
 │  └─ reamlet-native-host    `reamlet-native-host.exe`                       (S13)
+├─ extension/                the browser extension (plain JavaScript, MV3)   (S13)
 ├─ assets/                   icon, fonts (with licence), fixtures for tests
 ├─ installer/                installer script                                (S15)
 └─ xtask/                    build, package, perf-measure commands

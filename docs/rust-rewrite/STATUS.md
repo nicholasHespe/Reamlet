@@ -3,7 +3,7 @@
 Reference machine: _to be recorded in S00_
 Confirmed budgets: _to be confirmed in S00 (see 04-quality-and-performance.md §1)_
 Toolkit / backend / engine decisions: _to be confirmed in S00_
-Owner decisions: fresh start, no backwards compatibility; all 19 behaviours in spec §17 approved (2026-11-16)
+Owner decisions: fresh start, no backwards compatibility; all 19 behaviours in spec §17 approved; browser extension to be rebuilt with a new protocol, app no longer downloads from web addresses (2026-11-16)
 
 | Stage | State | Branch/PR | Date | Notes |
 |---|---|---|---|---|
@@ -20,7 +20,7 @@ Owner decisions: fresh start, no backwards compatibility; all 19 behaviours in s
 | S10 Document tools | not started | | | |
 | S11 Printing | not started | | | |
 | S12 Sessions, windows and shell integration | not started | | | |
-| S13 Web opens and browser bridge | not started | | | |
+| S13 Browser bridge and extension | not started | | | |
 | S14 Polish | not started | | | |
 | S15 Packaging and release | not started | | | |
 

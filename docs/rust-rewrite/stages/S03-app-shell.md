@@ -13,8 +13,9 @@ start-up and memory budgets. No documents yet.
 1. **Start-up path** exactly as `02` §7, with the single-instance hand-over
    before anything else is initialised.
 2. **Single instance**: mutex + named pipe (`03` §5); the running app receives
-   `{target, background}` requests as events (opening them is S04/S13; here
-   they are logged and the window is raised/restored unless `background`).
+   `open` and `ping` requests (`03` §5) and replies to them (opening files is
+   S04, browser hand-over S13; here an `open` is logged, the window is
+   raised/restored unless `background`, and the reply is `ok`).
 3. **Command line** parsing (`03` §5), including the measurement switches and
    stubs for the maintenance subcommands.
 4. **Window**: sizes, custom title bar with native behaviours (spec §1.1) —
@@ -66,5 +67,4 @@ double-click maximise, multi-monitor DPI change; no flash at start in either
 theme.
 
 ## Out of scope
-Tabs and documents (S04); the Settings and Extension ID dialogs' contents
-(S11, S13); session restore (S12).
+Tabs and documents (S04); the Settings dialog's contents (S11); session restore (S12).

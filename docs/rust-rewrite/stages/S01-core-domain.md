@@ -64,7 +64,7 @@ a user closes a window (one of several vs last, with/without persistent tabs);
 should-restore; set of files still referenced; path normalisation and
 inside-folder test.
 
-**`web`** — safe PDF file name; file name from `Content-Disposition`/URL;
+**`web`** — safe PDF file name; unused-name numbering;
 flood gate (20 per 30 s, 30 s quiet, skipped count, injectable clock); failure
 report wording.
 
@@ -114,11 +114,11 @@ All unit tests, named for the behaviour they pin. At minimum:
   active index → −1; damaged file → empty; closing one window of several
   forgets only it; closing the last keeps tabs only with persistent tabs;
   paths compare case-insensitively.
-- *Web*: server file name preferred, then URL; unsafe names made safe (reserved
-  characters, device names, trailing dots, length, missing extension); flood
-  gate — up to the limit pass, spread-out requests never trip it, a slow drip
-  stays shut out, reopening after quiet, skipped count reported once and only
-  after quiet; failure wording for one, several, and more than five reasons.
+- *Web*: unsafe names made safe (reserved characters, device names, trailing
+  dots, length, missing extension, empty → "download.pdf"); flood gate — up to
+  the limit pass, spread-out requests never trip it, a slow drip stays shut
+  out, reopening after quiet, skipped count reported once and only after
+  quiet; flood warning wording.
 - *Settings*: unknown keys survive a round trip; malformed values fall back
   per key.
 

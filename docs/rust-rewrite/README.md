@@ -33,7 +33,7 @@ for them now.
 
 This is a **fresh start**: there is no backwards compatibility with any
 earlier version of Reamlet — no settings, sessions or registry entries to
-migrate. The one outside dependency kept is the browser extension's protocol.
+migrate. The browser extension is rebuilt too, with a new protocol (stage S13).
 
 ## The documents
 
@@ -66,7 +66,7 @@ the stages it depends on are marked done in `STATUS.md`.
 | S10 | [Document tools](stages/S10-document-tools.md) | S08 | Combine, reorder/remove pages, footer, watermark |
 | S11 | [Printing](stages/S11-printing.md) | S08 | Print window with preview, N-up, booklet, driver preferences, printer-by-page-size |
 | S12 | [Sessions, windows and shell integration](stages/S12-sessions-windows.md) | S08 | Session restore, moving tabs between windows, drag file out, copy file, reveal |
-| S13 | [Web opens and browser bridge](stages/S13-web-bridge.md) | S03 S12 | Open URLs, flood protection, native messaging host, extension ID |
+| S13 | [Browser bridge and extension](stages/S13-web-bridge.md) | S03 S12 | Rebuilt extension, native helper, real open results, flood protection |
 | S14 | [Polish](stages/S14-polish.md) | S07 S12 | Spell-check, keyboard completeness, accessibility, diagnostics |
 | S15 | [Packaging and release](stages/S15-packaging.md) | all | Installer, portable build, file association, release gates |
 

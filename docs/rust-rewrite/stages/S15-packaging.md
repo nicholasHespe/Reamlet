@@ -22,12 +22,12 @@ migrated, detected or cleaned up.
    "Set Reamlet as the default PDF viewer" (`03` §7).
    Installing a newer build of this program over an older one closes a
    running Reamlet (asks first) and replaces its files; the user's settings,
-   session and extension ID carry over because they live in the data folder.
+   and session carry over because they live in the data folder.
 3. **Uninstaller**: closes running instances, removes files, shortcuts,
    registry entries from `03` §§4.1 and 7,
    leaves the user's data folder unless they tick "also remove settings".
 4. **Portable build**: a zip of `Reamlet.exe`, the engine library (if not
-   statically linked), `reamlet-native-host.exe`, the manifest template,
+   statically linked), `reamlet-native-host.exe`,
    licences and a short README. Runs from any folder; helper registration via
    the app (S13).
 5. **Third-party notices** generated from the dependency tree, plus the
@@ -47,8 +47,7 @@ Automated (Windows CI, fresh runner user profile):
 - Silent install → files present, shortcuts present, registry entries exactly
   as `03` §§4.1 and 7; `Reamlet.exe --exit-after-first-frame` runs from the
   install folder.
-- Install build N, change theme, a toggle, a printer rule and the extension
-  ID, open two tabs with Keep Tabs on, then install build N+1 over it: all of
+- Install build N, change theme, a toggle and a printer rule, open two tabs with Keep Tabs on, then install build N+1 over it: all of
   those are intact and the session restores.
 - Silent uninstall → install folder, shortcuts and all listed registry entries
   gone; data folder kept by default.
@@ -62,7 +61,7 @@ Automated (Windows CI, fresh runner user profile):
 - Licence gate: `cargo deny` clean; notices file lists every dependency.
 
 Manual (owner): install on a real machine and confirm the browser extension
-works once its ID is entered; set as default via the Windows
+works with no further setup; set as default via the Windows
 page; open a PDF from Explorer; uninstall.
 
 ## Out of scope

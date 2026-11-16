@@ -7,10 +7,11 @@ PDFs.
 **This is a fresh start.** There is no requirement to read, migrate or clean
 up anything an earlier version of Reamlet wrote, installed or registered. The
 file formats in §§2–3 are this plan's own and may be changed by a stage that
-has a good reason (record it in `STATUS.md`). Two things here are genuinely
-external and must be implemented exactly: the browser-extension wire protocol
-(§4.3), because the extension is a separate published project, and the saved
-PDF format (§6), because other viewers read it.
+has a good reason (record it in `STATUS.md`). The browser bridge (§4) is
+likewise this plan's own design, but its two ends ship separately (the
+extension through browser stores, the helper with Reamlet), so once released
+it changes only by version negotiation. The saved PDF format (§6) is external
+in the full sense: other viewers read it.
 
 ---
 
@@ -21,7 +22,7 @@ PDF format (§6), because other viewers read it.
 | Data folder | `%APPDATA%\Reamlet\` |
 | Settings | `%APPDATA%\Reamlet\settings.json` |
 | Session | `%APPDATA%\Reamlet\session.json` |
-| Downloads kept for tabs | `%APPDATA%\Reamlet\Downloads\` |
+| PDFs received from the browser | `%APPDATA%\Reamlet\Downloads\` |
 | Logs | `%APPDATA%\Reamlet\logs\` |
 
 Files in the data folder that are not listed here are ignored.
@@ -42,7 +43,6 @@ file is treated as `{}`.
 | `reuseOpenTab` | boolean | `true` | Switch to Already-Open Tab |
 | `restoreSession` | boolean | `true` | Restore Tabs After a Crash |
 | `persistentTabs` | boolean | `false` | Keep Tabs Between Sessions |
-| `extensionId` | string | absent | Browser extension ID |
 | `printerRules` | array of `{ "widthMm": number, "heightMm": number, "printer": string }` | `[]` | Printer by page size |
 
 `printerRules` is sanitised whenever read or written: entries that are not
@@ -88,22 +88,30 @@ needed") is on the absolute path, case-insensitively.
 
 ## 4. Browser bridge
 
-### 4.1 Native messaging host
-- Host name: `com.reamlet.chromebridge`.
-- Executable: `reamlet-native-host.exe`, installed beside `Reamlet.exe`.
-- Manifest file `com.reamlet.chromebridge.json`, beside the executables:
+Three parts: the **extension** (in the browser), the **helper**
+(`reamlet-native-host.exe`, started by the browser on demand) and the **app**.
+The extension lets the browser download the PDF, then asks the helper to open
+the finished file; the helper asks the running app and relays its real answer.
+
+```
+extension ──native messaging──▶ helper ──instance pipe (§5)──▶ app
+          ◀────── reply ───────        ◀────── reply ────────
+```
+
+### 4.1 Registration
+- Host name: `com.reamlet.bridge`.
+- Manifest file `com.reamlet.bridge.json`, beside the executables:
   ```json
   {
-    "name": "com.reamlet.chromebridge",
-    "description": "Reamlet native messaging host",
+    "name": "com.reamlet.bridge",
+    "description": "Reamlet browser bridge",
     "path": "C:\\…\\reamlet-native-host.exe",
     "type": "stdio",
-    "allowed_origins": [ "chrome-extension://<EXTENSION_ID>/" ]
+    "allowed_origins": [ "chrome-extension://<ID>/" ]
   }
   ```
-  A fresh install writes the placeholder ID `PLACEHOLDER_CHROME_ID`.
 - Registration: for each browser, the **default value** of
-  `HKCU\<key>\com.reamlet.chromebridge` is the manifest's full path.
+  `HKCU\<key>\com.reamlet.bridge` is the manifest's full path.
 
   | Browser | `<key>` |
   |---|---|
@@ -114,61 +122,116 @@ needed") is on the absolute path, case-insensitively.
   | Opera | `Software\Opera Software\Opera\NativeMessagingHosts` |
   | Opera GX | `Software\Opera Software\Opera GX\NativeMessagingHosts` |
 
-### 4.2 Extension ID
-- *Get*: the first `allowed_origins` entry matching
-  `chrome-extension://<id>/` yields `<id>`; none yields empty.
-- *Set*: rewrite the manifest with `allowed_origins` =
-  `["chrome-extension://<id>/"]` and store `extensionId` in settings.
-- At every start-up (in the background), if settings hold an `extensionId`,
-  re-apply it to the manifest, so reinstalling or updating (which rewrites
-  the manifest) does not lose it. An unwritable manifest is ignored silently.
+### 4.2 Extension identity
+- The extension's `manifest.json` carries a `key` (its public key), which gives
+  it the same ID wherever it is loaded from — unpacked, or installed from a
+  store that was given the same key. The private key is the owner's and is
+  never committed.
+- The list of allowed extension IDs is a constant in the app's source. The
+  manifest's `allowed_origins` is generated from it at registration. If a
+  browser store assigns a different ID, that ID is added to the constant.
+  There is no user-editable ID.
 
-### 4.3 Wire protocol
-Standard Chrome native messaging: each message, in both directions, is a
-4-byte little-endian unsigned length followed by that many bytes of UTF-8 JSON.
-The host handles any number of messages until stdin closes, then exits 0.
+### 4.3 Extension ⇄ helper
+Standard native messaging framing: each message, in both directions, is a
+4-byte little-endian unsigned length followed by that many bytes of UTF-8
+JSON. Replies must stay under 1 MB (they are tiny). The helper handles any
+number of messages until stdin closes, then exits 0. Every request has `v`
+(protocol version, currently `1`) and `op`.
 
-Request (all keys optional):
+**`ping`** — is Reamlet there?
 ```json
-{ "url": "https://… or C:\\path\\file.pdf", "bytes": "<base64>", "filename": "name.pdf", "background": true }
+→ { "v": 1, "op": "ping" }
+← { "ok": true, "v": 1, "appVersion": "1.2.3", "running": true }
 ```
-Handling, in this order:
-1. Locate `Reamlet.exe`: beside the host; else
-   `%LOCALAPPDATA%\Programs\Reamlet\Reamlet.exe`. Not found →
-   `{"ok": false, "error": "Reamlet.exe not found", "checked": [<paths tried>]}`.
-2. If `bytes` is present: decode; save into the Downloads folder (§1) under the
-   safe form of `filename` (spec §12 naming rules; "download.pdf" if absent),
-   never overwriting — claim a free name by exclusive create, numbering
-   " (2)", " (3)"…; launch `Reamlet.exe <saved path> [--background]`.
-3. Else `url` must be a non-empty string, otherwise
-   `{"ok": false, "error": "missing url or bytes"}`.
-   - If it is a local Windows path (`X:\…` or `\\…`): move that file into the
-     Downloads folder under its own name (same no-overwrite rule); if the move
-     fails, use the original path. Launch Reamlet with the resulting path.
-   - Otherwise launch `Reamlet.exe <url> [--background]`.
-4. Reamlet is launched detached (the host does not wait for it). Reply
-   `{"ok": true}`; on any error `{"ok": false, "error": "<message>"}`.
-   A message that is not valid JSON → `{"ok": false, "error": "parse error"}`.
+`ok: true` means the helper found `Reamlet.exe`; `running` says whether the
+app answered on the pipe. It never starts the app.
 
----
+**`open`** — open a finished download.
+```json
+→ { "v": 1, "op": "open", "path": "C:\\Users\\me\\Downloads\\report.pdf",
+    "sourceUrl": "https://example.com/report.pdf", "background": false }
+← { "ok": true }
+← { "ok": false, "code": "not_pdf", "error": "The file is not a PDF." }
+```
+The helper, in order:
+1. Checks `path` is an absolute path to an existing file → else `file_missing`.
+2. Locates `Reamlet.exe` beside itself, else in
+   `%LOCALAPPDATA%\Programs\Reamlet` → else `not_installed`.
+3. Connects to the app's pipe. If nothing is listening, starts
+   `Reamlet.exe` (with `--background` when asked) detached and retries the
+   connection for up to 5 s → else `no_response`.
+4. Sends the app an `open` request (§5) with `path`, `sourceUrl`,
+   `background` and `fromBrowser: true`, waits up to 10 s for its reply and
+   relays it unchanged.
+
+The **app**, on a `fromBrowser` open: applies flood protection (→ `busy`);
+checks the file starts with `%PDF-` (→ `not_pdf`); moves the file into its
+Downloads folder under a safe, unused name (spec §12.4; if the move fails,
+copies; if that fails → `internal`); opens the tab; replies `{ "ok": true }`.
+The reply is sent once the tab exists — it does not wait for rendering.
+
+Failure codes: `file_missing`, `not_installed`, `no_response`, `not_pdf`,
+`busy`, `unsupported_version`, `bad_request`, `internal`. Each reply also
+carries a human-readable `error`. A message that is not valid JSON gets
+`bad_request`. A request whose `v` is higher than the helper knows gets
+`unsupported_version` together with the highest `v` it supports, so a newer
+extension can fall back.
+
+### 4.4 What the extension must do
+- **Downloads the user starts**: let the browser finish; on completion send
+  `open` with the downloaded file's path. On `ok: true` remove the entry from
+  the browser's download list (the file itself has been moved by the app). On
+  any failure do nothing more — it is an ordinary completed download.
+- **Navigations to a PDF**: start a browser download of that address (so the
+  browser's session is used), saved without prompting, and treat it as above.
+  On `ok: true` send the tab back (or close it if it has no history). On
+  failure, or if the download cannot be started, let the tab load the PDF in
+  the browser, and do not intercept that load again.
+- Only act on downloads that are new and in progress when first seen; never on
+  the browser's history of earlier downloads. Downloads the extension itself
+  started are not intercepted a second time.
+- `background` is true when the originating tab is not the active tab.
+- Respect the master and per-site switches (spec §12.2) before doing anything.
+- Call `ping` when the popup opens, to show the "isn't installed" status.
+- Permissions are the minimum these behaviours need.
+
+The exact browser APIs for "download without prompting", "remove from the
+download list" and "stop the in-flight navigation" are verified at the start
+of S13; if one is unavailable the behaviour in spec §12.1 still holds — in
+particular, a PDF is never lost.
 
 ## 5. Command line and instance protocol
 
-- `Reamlet.exe [target] [--background]` as in spec §14. Arguments beginning
-  with `-` other than those listed here are ignored.
+- `Reamlet.exe [path] [--background]` as in spec §14. Arguments beginning with
+  `-` other than those listed here are ignored. Web addresses are not accepted.
 - Maintenance subcommands (exit when done, show no window):
   `--register-host`, `--unregister-host` (write/remove §4.1 for the folder the
   executable is in), `--register-file-assoc`, `--unregister-file-assoc` (§7).
 - Test/measurement switches used by the harness (`04`): `--data-dir <path>`
   (use this instead of `%APPDATA%\Reamlet`), `--exit-after-first-frame`,
   `--exit-after-first-page`, `--perf-log <file>`.
-- Single instance: a named mutex scoped to the user session plus a named pipe
-  (`\\.\pipe\Reamlet-<user SID>`). A second launch sends one length-prefixed
-  JSON message `{ "target": string|null, "background": bool }` and exits 0
-  without waiting. The pipe accepts connections only from the same user.
 - The executable must be named `Reamlet.exe`.
 
----
+**Instance pipe.** A named mutex scoped to the user session decides who is the
+running instance; it serves a named pipe (`\\.\pipe\Reamlet-<user SID>`) that
+accepts connections only from the same user. Messages in both directions are
+a 4-byte little-endian length followed by UTF-8 JSON; one request, one reply,
+per connection.
+
+```json
+→ { "op": "open", "path": "C:\\…\\a.pdf" | null, "sourceUrl": string | null,
+    "background": bool, "fromBrowser": bool }
+← { "ok": true }  |  { "ok": false, "code": "…", "error": "…" }
+
+→ { "op": "ping" }
+← { "ok": true, "appVersion": "1.2.3" }
+```
+- `open` with `path: null` just raises the window (unless `background`).
+- A second launch of `Reamlet.exe` sends `open` (`fromBrowser: false`) and
+  exits 0 **without waiting for the reply**. The helper (§4.3) waits for it.
+- Flood protection and the move into the Downloads folder apply only when
+  `fromBrowser` is true.
 
 ## 6. Saved PDF: how annotations are written
 
@@ -236,4 +299,4 @@ file is written unencrypted; otherwise opening already failed.
 - "Set as default" on the installer's last page: on current Windows the user's
   default can only be changed by the user, so the option opens the system
   default-apps page for Reamlet rather than writing protected keys.
-- Uninstall removes all of the above and §4.1.
+- Uninstall removes all of the above and the registrations in §4.1.

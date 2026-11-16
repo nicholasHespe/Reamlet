@@ -28,7 +28,7 @@ logical pixels per point (zoom 1.0 draws one point as one logical pixel).
 - **File** menu: Open… (Ctrl+O) · Save (Ctrl+S) · Save As… (Ctrl+Shift+S) ·
   — · Print… (Ctrl+P) · — · Close Tab (Ctrl+W) · Reopen Tab (Ctrl+Shift+T) ·
   — · ☑ Switch to Already-Open Tab · ☑ Restore Tabs After a Crash ·
-  ☑ Keep Tabs Between Sessions · — · Settings… · Extension ID… · — · Quit.
+  ☑ Keep Tabs Between Sessions · — · Settings… · — · Quit.
   The three ☑ items are toggles showing a tick when on; the two session ones
   carry tooltips ("Reopen your tabs if Reamlet closed without you closing it: a
   crash, power loss or system restart" / "Reopen your tabs every time Reamlet
@@ -137,12 +137,12 @@ Other Tabs.
 - File ▸ Open shows the system dialog (title "Open PDF", filter PDF, multiple
   selection). All chosen files appear as tabs at once; the last chosen becomes
   active and loads first, then the rest in order.
-- Other ways in: a path or URL on the command line; a second launch forwarded
+- Other ways in: a file path on the command line; a second launch forwarded
   to the running app; Explorer "Open with"/double-click; the browser extension
   (§12); dropping PDF files from Explorer onto the window.
 - **Switch to Already-Open Tab** (default on): opening a document that is
-  already open *and unmodified* — matched by file path, or by source URL for
-  web documents — activates the existing tab instead of opening a duplicate.
+  already open *and unmodified* — matched by file path, or by web address for
+  documents that came from the browser — activates the existing tab instead of opening a duplicate.
 - A new tab opens at **fit width**, scrolled to the top.
 - A file that cannot be opened when the user explicitly asked for it: message
   `Could not open "<name>": <reason>` and no tab remains. Password-protected
@@ -621,49 +621,73 @@ preview updates as settings change and never blocks the controls.
 
 ---
 
-## 12. Opening from the web and the browser extension
+## 12. Opening PDFs from the browser
 
-- Given an `https://` address, Reamlet downloads the PDF and opens it as a tab
-  that remembers its source address. The tab appears at once, in a loading
-  state, while the download runs.
-- Download rules: HTTPS only (plain HTTP is refused: "Only HTTPS URLs are
-  supported"); up to 5 redirects, never to non-HTTPS; non-2xx is an error
-  ("HTTP 404"); the file must begin with `%PDF-` ("Downloaded file is not a
-  valid PDF"). The system's proxy settings and certificate store are used.
-- The file is kept under the name the server gave it (`Content-Disposition`
-  `filename*`, then `filename`), else the last segment of the URL path, made
-  safe for Windows (no path, reserved characters → `_`, no trailing dots or
-  spaces, reserved device names prefixed `_`, `.pdf` enforced, ≤ 200
-  characters, "download.pdf" when nothing is left). A taken name gets
-  " (2)", " (3)", ….
-- Downloads live in the app's own Downloads folder (`03` §1). A downloaded
-  file no open tab or saved session needs is deleted once it is a day old;
-  the sweep runs at start-up and hourly.
-- **Failures** are gathered for one second and reported in a single dialog:
-  one failure — title "Reamlet — Could not open URL", the reason; several —
-  title "Reamlet — Could not open n URLs", each distinct reason with its count
-  ("HTTP 404 (×3)"), most frequent first, at most five lines then "…and n
-  other reasons".
-- **Flood protection** (web addresses only; local files are never limited): at
-  most 20 web opens in any 30 seconds. Once one is refused, all are refused
-  until 30 seconds pass with no requests at all. Refused requests do not raise
-  the window. When the flood ends, one warning: title "Reamlet — Too many PDFs
-  from the web at once"; "Reamlet opened the first 20 PDFs from the web and
-  skipped n more that arrived straight after."; detail "If you did not ask for
-  these, the Reamlet browser extension may be reopening old downloads. Turn it
-  off from its toolbar popup until it is updated."
-- **Browser extension** (Chrome, Edge, Brave, Vivaldi, Opera, Opera GX): a
-  small helper program installed with Reamlet receives requests from the
-  extension and hands them to Reamlet (`03` §4). The extension can send a web
-  address, a local file path, or the PDF's bytes with a file name, and can ask
-  for the tab to open in the background.
-- **Extension ID…** (File menu): a dialog with one field — hint "Paste the
-  extension ID from edge://extensions or chrome://extensions." — pre-filled
-  with the current ID; Save stores it so the extension is allowed to talk to
-  the helper. The ID survives reinstalling and updating Reamlet. The field has
-  a Cut/Copy/Paste context menu.
+Reamlet does not download anything itself. A companion **browser extension**
+lets the browser fetch the PDF — with the user's logins, proxy and
+certificates — and then hands the finished file to Reamlet.
 
----
+### 12.1 What the user sees
+- Clicking a link to a PDF, or starting a PDF download, in a supported browser
+  (Chrome, Edge, Brave, Vivaldi, Opera, Opera GX) opens the PDF as a tab in
+  Reamlet instead. This works for sites the user is logged in to.
+- If the browser tab the PDF came from was in the background, the Reamlet tab
+  opens without Reamlet taking focus.
+- The browser tab that was heading to the PDF goes back to the page it came
+  from; a tab that was opened only for the PDF is closed.
+- **A PDF is never lost.** If Reamlet is not installed, is not responding, or
+  refuses the file, the browser shows or keeps the PDF exactly as it would
+  have without the extension.
+- The Reamlet tab remembers the web address the PDF came from (used for
+  Switch to Already-Open Tab and kept in the saved session).
+- No setup: installing Reamlet and installing the extension is all that is
+  needed. There is no extension ID to copy.
+
+### 12.2 The extension's own controls (toolbar popup)
+- A master switch: "Open PDFs in Reamlet". When off, the toolbar icon shows an
+  "OFF" badge and the browser behaves as if the extension were not installed.
+- A per-site switch for the site in the current tab. It is keyed on the site
+  the user is **browsing** (the page that linked to the PDF), not on wherever
+  the PDF file happens to be hosted. Disabled while the master switch is off.
+- A status line: "PDFs will open in Reamlet." · "PDFs on <site> open
+  normally." · "Interception paused — PDFs open normally." · and, when the
+  helper cannot be reached, "Reamlet isn't installed or needs reinstalling."
+- Both switches are remembered.
+
+### 12.3 What counts as a PDF
+- A top-level page load whose response is `application/pdf`, or whose address
+  path ends in `.pdf`.
+- A download whose type is `application/pdf` or whose file name or address
+  ends in `.pdf` — but only a download the user has just started. Downloads
+  the browser lists from earlier sessions, or resumes at start-up, are never
+  touched.
+- PDFs inside frames, and PDFs that can only be fetched by re-submitting a
+  form, are left to the browser.
+
+### 12.4 Files received from the browser
+- The file is kept in Reamlet's own Downloads folder (`03` §1), under the name
+  the browser gave it, made safe for Windows (no path, reserved characters →
+  `_`, no trailing dots or spaces, reserved device names prefixed `_`, `.pdf`
+  enforced, ≤ 200 characters, "download.pdf" when nothing is left). A taken
+  name gets " (2)", " (3)", …. It does not stay in the user's own Downloads
+  folder or the browser's download list.
+- Such a file is deleted once it is a day old and no open tab or saved session
+  needs it; the sweep runs at start-up (when idle) and hourly. To keep a PDF,
+  the user saves it somewhere with Save As.
+- A file that does not begin with `%PDF-` is refused (and so stays with the
+  browser).
+
+### 12.5 Flood protection
+A safety net in case a browser or extension misbehaves. It applies only to
+requests from the browser; files opened from Explorer or the command line are
+never limited.
+- At most 20 browser opens in any 30 seconds. Once one is refused, all are
+  refused until 30 seconds pass with no requests at all. Refused requests do
+  not raise the window, and the browser keeps those PDFs.
+- When the flood ends, one warning: title "Reamlet — Too many PDFs from the
+  browser at once"; "Reamlet opened the first 20 PDFs from the browser and
+  left n more with the browser."; detail "If you did not ask for these, turn
+  the Reamlet browser extension off from its toolbar popup."
 
 ## 13. Sessions
 
@@ -673,7 +697,7 @@ preview updates as settings change and never blocks the controls.
   active tab.
 - **Keep Tabs Between Sessions** (default off): the same, after an ordinary
   close as well.
-- Only file-backed tabs are remembered (with their web source address, if
+- Only file-backed tabs are remembered (with the web address they came from, if
   any). Closing one window of several forgets that window's tabs. Closing the
   last window ends the run and, unless Keep Tabs is on, forgets everything.
 - On restore the tabs appear at once; the active tab's document loads first.
@@ -691,7 +715,7 @@ preview updates as settings change and never blocks the controls.
 - One Reamlet process runs per user. Launching it again hands the request to
   the running one and exits at once.
 - `Reamlet.exe [target] [--background]` — *target* is the first argument that
-  is an `http(s)://` address or an existing path ending `.pdf`.
+  is an existing path ending `.pdf`.
   - Running already: the target opens as a tab in the first window, which is
     restored if minimised and brought to the front — unless `--background`,
     which opens the tab without raising or focusing anything.
@@ -734,8 +758,11 @@ preview updates as settings change and never blocks the controls.
 
 **Fresh start.** Nothing written, installed or registered by an earlier
 version of Reamlet needs to be read, migrated or cleaned up: not settings, not
-saved sessions, not registry entries. (The browser-extension protocol is kept,
-because the extension is a separate project — see `03` §4.)
+saved sessions, not registry entries.
+
+**The browser extension is rebuilt as part of this work** (§12, `03` §4, stage
+S13), with a new protocol between it and Reamlet. Reamlet no longer downloads
+from web addresses itself, and `Reamlet.exe <web address>` is not supported.
 
 **Approved behaviours.** Each row below is a point where an agent who knows
 the earlier product might expect something different. All have been approved
@@ -756,7 +783,7 @@ by the owner and are requirements, not options.
 | 11 | Saves are atomic. | S08 |
 | 12 | UI scaling is remembered. | S03 |
 | 13 | PDFs can be dropped onto the window to open them. | S04 |
-| 14 | The window appears before a web download finishes. | S13 |
+| 14 | The browser downloads PDFs (so logged-in sites work) and hands Reamlet the file; a PDF Reamlet cannot open stays with the browser; no extension ID to enter. | S13 |
 | 15 | "Developer Tools" and "Reload App" are gone; a diagnostics overlay replaces them (`04` §2). | S14 |
 | 16 | Windows 11 snap-layout flyout works on the maximise button. | S03 |
 | 17 | Printer preferences never touch the printer's saved defaults, even transiently. | S11 |

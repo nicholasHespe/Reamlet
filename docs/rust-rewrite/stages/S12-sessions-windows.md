@@ -76,5 +76,5 @@ desktop; drag the grip into Explorer and into an email; log off with tabs open
 and log back in.
 
 ## Out of scope
-Web-sourced tabs' download behaviour (S13) — but `sourceUrl` is carried through
+Receiving files from the browser (S13) — but `sourceUrl` is carried through
 the session here.

@@ -83,4 +83,4 @@ touchpad pinch feels right.
 
 ## Out of scope
 Text selection (S05), annotations (S06–S07), saving (S08), moving tabs between
-windows and drag-out (S12), URLs (S13).
+windows and drag-out (S12), files from the browser (S13).
