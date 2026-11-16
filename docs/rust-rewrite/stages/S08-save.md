@@ -4,8 +4,8 @@
 **Read first:** spec §§2.4, 7, 8; `02` §§4.4–4.5; `03` §6.
 
 ## Goal
-`reamlet-pdfwrite` turns a document model into PDF bytes that every viewer
-shows exactly as Reamlet did; Save, Save As and the unsaved-changes prompts
+`margin-pdfwrite` turns a document model into PDF bytes that every viewer
+shows exactly as Margin did; Save, Save As and the unsaved-changes prompts
 work end to end.
 
 ## Deliverables

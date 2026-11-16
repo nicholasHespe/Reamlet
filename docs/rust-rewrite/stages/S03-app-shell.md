@@ -5,7 +5,7 @@
 `04` §1.1–1.2.
 
 ## Goal
-`Reamlet.exe` starts, shows its window with full chrome, remembers its
+`Margin.exe` starts, shows its window with full chrome, remembers its
 settings, and runs as a single instance — and already meets the empty-window
 start-up and memory budgets. No documents yet.
 

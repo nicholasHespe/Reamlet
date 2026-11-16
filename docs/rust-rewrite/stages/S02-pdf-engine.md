@@ -5,7 +5,7 @@ defines the minimum and reconciles later).
 **Read first:** `02` §§1, 5, 11; spec §§1.4, 3, 4, 5, 10.
 
 ## Goal
-`reamlet-engine`: everything that reads a PDF, behind a trait, running on its
+`margin-engine`: everything that reads a PDF, behind a trait, running on its
 own thread with a cancellable priority queue — plus a fake implementation that
 lets UI stages be tested without PDFium.
 

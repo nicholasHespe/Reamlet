@@ -1,12 +1,12 @@
-# Reamlet in Rust — rewrite plan
+# Margin — build plan (Rust)
 
-This folder is a self-contained plan for building Reamlet as a native Rust
+This folder is a self-contained plan for building Margin as a native Rust
 application. It is written to be copied into an **empty repository** and worked
 through by agents one stage at a time. Nothing here assumes access to the
 existing Electron/TypeScript code: every feature the product needs is described
 in these documents.
 
-## What Reamlet is
+## What Margin is
 
 A lightweight, standalone PDF viewer for Windows. People use it instead of
 leaving dozens of PDFs open in browser tabs: one window, a vertical list of
@@ -32,7 +32,7 @@ behind one seam so other platforms can follow, but nothing is built or tested
 for them now.
 
 This is a **fresh start**: there is no backwards compatibility with any
-earlier version of Reamlet — no settings, sessions or registry entries to
+earlier product (then called Reamlet) — no settings, sessions or registry entries to
 migrate. The browser extension is rebuilt too, with a new protocol (stage S13).
 
 ## The documents

@@ -42,7 +42,7 @@ engine) confirmed by numbers rather than assumed.
    chosen engine binding approach (crate vs raw FFI, static vs DLL), the
    measured numbers, and the **confirmed budgets** table agreed with the owner
    (replacing the proposed values in `04` §1 if they change).
-9. **Fixtures**: a generator (in a `reamlet-testkit` dev crate) for
+9. **Fixtures**: a generator (in a `margin-testkit` dev crate) for
    deterministic PDFs — n pages of text, mixed page sizes, rotated pages,
    cropped pages with non-zero origins, a page with no content stream, an
    outline, a simple form — plus the "reference document" (200 pages, ~10 MB,

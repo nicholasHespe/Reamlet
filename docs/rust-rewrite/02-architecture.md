@@ -1,6 +1,6 @@
 # 02 — Architecture
 
-How Reamlet is built in Rust, reasoned from the three goals (fast start, low
+How Margin is built in Rust, reasoned from the three goals (fast start, low
 memory, smooth UI) rather than from how any earlier version worked.
 
 Library and crate names below are the plan's recommendation as of writing.
@@ -266,19 +266,19 @@ checker or the PDF engine.
 ## 8. Crates
 
 ```
-reamlet/                     workspace
+margin/                     workspace
 ├─ crates/
-│  ├─ reamlet-core           pure logic, no I/O, no UI, no unsafe            (S01)
-│  ├─ reamlet-engine         PdfEngine trait, PDFium impl, engine thread,
+│  ├─ margin-core           pure logic, no I/O, no UI, no unsafe            (S01)
+│  ├─ margin-engine         PdfEngine trait, PDFium impl, engine thread,
 │  │                         fake engine for tests                           (S02)
-│  ├─ reamlet-pdfwrite       materialise: lopdf edits, page import,
+│  ├─ margin-pdfwrite       materialise: lopdf edits, page import,
 │  │                         annotation + content writers, font subsetting   (S08, S10)
-│  ├─ reamlet-platform       Platform trait + Windows impl: dialogs, drag-drop,
+│  ├─ margin-platform       Platform trait + Windows impl: dialogs, drag-drop,
 │  │                         clipboard, printing, registry, pipe, spell-check (S03…)
-│  ├─ reamlet-ui             widgets, viewport, tabs, dialogs — egui only,
+│  ├─ margin-ui             widgets, viewport, tabs, dialogs — egui only,
 │  │                         talks to engine/platform through traits         (S03…)
-│  ├─ reamlet-app            the executable `Reamlet.exe`: wiring, start-up  (S03)
-│  └─ reamlet-native-host    `reamlet-native-host.exe`                       (S13)
+│  ├─ margin-app            the executable `Margin.exe`: wiring, start-up  (S03)
+│  └─ margin-native-host    `margin-native-host.exe`                       (S13)
 ├─ extension/                the browser extension (plain JavaScript, MV3)   (S13)
 ├─ assets/                   icon, fonts (with licence), fixtures for tests
 ├─ installer/                installer script                                (S15)
@@ -315,7 +315,7 @@ real implementations. `unsafe` is confined to `engine` and `platform`.
 
 ## 10. Platform seam
 
-`reamlet-platform` exposes a `Platform` trait: file dialogs, message boxes
+`margin-platform` exposes a `Platform` trait: file dialogs, message boxes
 where native ones are used, start file drag, put file on clipboard, reveal in
 file manager, enumerate printers, printer preferences, run print job, register
 file association / native host, spell-check session, single-instance channel,

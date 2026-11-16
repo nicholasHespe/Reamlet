@@ -22,7 +22,7 @@ mostly about smoothness.
 3. **Tile cache** (`02` §5.2, 5.5): keyed tiles, base images, byte budget, LRU,
    pinning of visible tiles, per-frame texture upload budget, eviction on tab
    close.
-4. **Viewport widget**: layout from `reamlet-core`; draw order base → tiles →
+4. **Viewport widget**: layout from `margin-core`; draw order base → tiles →
    overlay hook (a callback later stages paint into, given the page's
    `PageView`); page shadow; overlay scrollbars (vertical and horizontal) with
    track click and thumb drag.

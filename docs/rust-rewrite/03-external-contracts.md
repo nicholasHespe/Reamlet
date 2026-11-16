@@ -5,11 +5,11 @@ line, the browser-extension bridge, the registry, and what it writes into
 PDFs.
 
 **This is a fresh start.** There is no requirement to read, migrate or clean
-up anything an earlier version of Reamlet wrote, installed or registered. The
+up anything the earlier product (then called Reamlet) wrote, installed or registered. The
 file formats in §§2–3 are this plan's own and may be changed by a stage that
 has a good reason (record it in `STATUS.md`). The browser bridge (§4) is
 likewise this plan's own design, but its two ends ship separately (the
-extension through browser stores, the helper with Reamlet), so once released
+extension through browser stores, the helper with Margin), so once released
 it changes only by version negotiation. The saved PDF format (§6) is external
 in the full sense: other viewers read it.
 
@@ -19,11 +19,11 @@ in the full sense: other viewers read it.
 
 | Purpose | Location |
 |---|---|
-| Data folder | `%APPDATA%\Reamlet\` |
-| Settings | `%APPDATA%\Reamlet\settings.json` |
-| Session | `%APPDATA%\Reamlet\session.json` |
-| PDFs received from the browser | `%APPDATA%\Reamlet\Downloads\` |
-| Logs | `%APPDATA%\Reamlet\logs\` |
+| Data folder | `%APPDATA%\Margin\` |
+| Settings | `%APPDATA%\Margin\settings.json` |
+| Session | `%APPDATA%\Margin\session.json` |
+| PDFs received from the browser | `%APPDATA%\Margin\Downloads\` |
+| Logs | `%APPDATA%\Margin\logs\` |
 
 Files in the data folder that are not listed here are ignored.
 
@@ -64,7 +64,7 @@ Writes are atomic (write a temporary file beside it, then rename over).
     {
       "tabs": [
         { "filePath": "C:\\Docs\\a.pdf", "sourceUrl": null },
-        { "filePath": "C:\\Users\\me\\AppData\\Roaming\\Reamlet\\Downloads\\b.pdf",
+        { "filePath": "C:\\Users\\me\\AppData\\Roaming\\Margin\\Downloads\\b.pdf",
           "sourceUrl": "https://example.com/b.pdf" }
       ],
       "activeIndex": 1
@@ -89,7 +89,7 @@ needed") is on the absolute path, case-insensitively.
 ## 4. Browser bridge
 
 Three parts: the **extension** (in the browser), the **helper**
-(`reamlet-native-host.exe`, started by the browser on demand) and the **app**.
+(`margin-native-host.exe`, started by the browser on demand) and the **app**.
 The extension lets the browser download the PDF, then asks the helper to open
 the finished file; the helper asks the running app and relays its real answer.
 
@@ -99,19 +99,19 @@ extension ──native messaging──▶ helper ──instance pipe (§5)──
 ```
 
 ### 4.1 Registration
-- Host name: `com.reamlet.bridge`.
-- Manifest file `com.reamlet.bridge.json`, beside the executables:
+- Host name: `com.margin.bridge`.
+- Manifest file `com.margin.bridge.json`, beside the executables:
   ```json
   {
-    "name": "com.reamlet.bridge",
-    "description": "Reamlet browser bridge",
-    "path": "C:\\…\\reamlet-native-host.exe",
+    "name": "com.margin.bridge",
+    "description": "Margin browser bridge",
+    "path": "C:\\…\\margin-native-host.exe",
     "type": "stdio",
     "allowed_origins": [ "chrome-extension://<ID>/" ]
   }
   ```
 - Registration: for each browser, the **default value** of
-  `HKCU\<key>\com.reamlet.bridge` is the manifest's full path.
+  `HKCU\<key>\com.margin.bridge` is the manifest's full path.
 
   | Browser | `<key>` |
   |---|---|
@@ -139,12 +139,12 @@ JSON. Replies must stay under 1 MB (they are tiny). The helper handles any
 number of messages until stdin closes, then exits 0. Every request has `v`
 (protocol version, currently `1`) and `op`.
 
-**`ping`** — is Reamlet there?
+**`ping`** — is Margin there?
 ```json
 → { "v": 1, "op": "ping" }
 ← { "ok": true, "v": 1, "appVersion": "1.2.3", "running": true }
 ```
-`ok: true` means the helper found `Reamlet.exe`; `running` says whether the
+`ok: true` means the helper found `Margin.exe`; `running` says whether the
 app answered on the pipe. It never starts the app.
 
 **`open`** — open a finished download.
@@ -156,10 +156,10 @@ app answered on the pipe. It never starts the app.
 ```
 The helper, in order:
 1. Checks `path` is an absolute path to an existing file → else `file_missing`.
-2. Locates `Reamlet.exe` beside itself, else in
-   `%LOCALAPPDATA%\Programs\Reamlet` → else `not_installed`.
+2. Locates `Margin.exe` beside itself, else in
+   `%LOCALAPPDATA%\Programs\Margin` → else `not_installed`.
 3. Connects to the app's pipe. If nothing is listening, starts
-   `Reamlet.exe` (with `--background` when asked) detached and retries the
+   `Margin.exe` (with `--background` when asked) detached and retries the
    connection for up to 5 s → else `no_response`.
 4. Sends the app an `open` request (§5) with `path`, `sourceUrl`,
    `background` and `fromBrowser: true`, waits up to 10 s for its reply and
@@ -203,18 +203,18 @@ particular, a PDF is never lost.
 
 ## 5. Command line and instance protocol
 
-- `Reamlet.exe [path] [--background]` as in spec §14. Arguments beginning with
+- `Margin.exe [path] [--background]` as in spec §14. Arguments beginning with
   `-` other than those listed here are ignored. Web addresses are not accepted.
 - Maintenance subcommands (exit when done, show no window):
   `--register-host`, `--unregister-host` (write/remove §4.1 for the folder the
   executable is in), `--register-file-assoc`, `--unregister-file-assoc` (§7).
 - Test/measurement switches used by the harness (`04`): `--data-dir <path>`
-  (use this instead of `%APPDATA%\Reamlet`), `--exit-after-first-frame`,
+  (use this instead of `%APPDATA%\Margin`), `--exit-after-first-frame`,
   `--exit-after-first-page`, `--perf-log <file>`.
-- The executable must be named `Reamlet.exe`.
+- The executable must be named `Margin.exe`.
 
 **Instance pipe.** A named mutex scoped to the user session decides who is the
-running instance; it serves a named pipe (`\\.\pipe\Reamlet-<user SID>`) that
+running instance; it serves a named pipe (`\\.\pipe\Margin-<user SID>`) that
 accepts connections only from the same user. Messages in both directions are
 a 4-byte little-endian length followed by UTF-8 JSON; one request, one reply,
 per connection.
@@ -228,7 +228,7 @@ per connection.
 ← { "ok": true, "appVersion": "1.2.3" }
 ```
 - `open` with `path: null` just raises the window (unless `background`).
-- A second launch of `Reamlet.exe` sends `open` (`fromBrowser: false`) and
+- A second launch of `Margin.exe` sends `open` (`fromBrowser: false`) and
   exits 0 **without waiting for the reply**. The helper (§4.3) waits for it.
 - Flood protection and the move into the Downloads folder apply only when
   `fromBrowser` is true.
@@ -238,7 +238,7 @@ per connection.
 Each annotation made in the app becomes one standard PDF annotation carrying
 its own normal appearance stream, appended to the page's `/Annots` in creation
 order (after any annotations already in the file). Nothing is drawn into the
-page content. Other viewers must show them exactly as Reamlet did.
+page content. Other viewers must show them exactly as Margin did.
 
 Common to all: `/Type /Annot`, `/F 4` (print), `/Rect`, `/AP << /N <form
 XObject> >>` where the form's `/BBox` equals `/Rect` and its matrix is identity
@@ -286,17 +286,17 @@ file is written unencrypted; otherwise opening already failed.
 
 ## 7. File association (per user)
 
-- `HKCU\Software\nicholasHespe\Reamlet\Capabilities`:
-  `ApplicationName` = "Reamlet", `ApplicationDescription` = "Lightweight PDF
-  viewer"; subkey `FileAssociations`: `.pdf` = `Reamlet.PDF`.
-- `HKCU\Software\RegisteredApplications`: `Reamlet` =
-  `Software\nicholasHespe\Reamlet\Capabilities`.
-- ProgID `HKCU\Software\Classes\Reamlet.PDF`: default "PDF Document";
+- `HKCU\Software\nicholasHespe\Margin\Capabilities`:
+  `ApplicationName` = "Margin", `ApplicationDescription` = "Lightweight PDF
+  viewer"; subkey `FileAssociations`: `.pdf` = `Margin.PDF`.
+- `HKCU\Software\RegisteredApplications`: `Margin` =
+  `Software\nicholasHespe\Margin\Capabilities`.
+- ProgID `HKCU\Software\Classes\Margin.PDF`: default "PDF Document";
   `DefaultIcon` = the executable's icon; `shell\open\command` =
-  `"<path>\Reamlet.exe" "%1"`.
-- `HKCU\Software\Classes\.pdf\OpenWithProgids`: value `Reamlet.PDF`.
+  `"<path>\Margin.exe" "%1"`.
+- `HKCU\Software\Classes\.pdf\OpenWithProgids`: value `Margin.PDF`.
 - After changes: `SHChangeNotify(SHCNE_ASSOCCHANGED)`.
 - "Set as default" on the installer's last page: on current Windows the user's
   default can only be changed by the user, so the option opens the system
-  default-apps page for Reamlet rather than writing protected keys.
+  default-apps page for Margin rather than writing protected keys.
 - Uninstall removes all of the above and the registrations in §4.1.

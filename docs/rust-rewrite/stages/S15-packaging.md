@@ -14,20 +14,20 @@ migrated, detected or cleaned up.
    supported-OS entries, `asInvoker`).
 2. **Installer** (per-user, no elevation; tool chosen by the agent — NSIS,
    Inno Setup or WiX — and recorded): installs to
-   `%LOCALAPPDATA%\Programs\Reamlet`; desktop
+   `%LOCALAPPDATA%\Programs\Margin`; desktop
    and Start-menu shortcuts; Add/Remove Programs entry; writes the native
    messaging manifest and the six browser keys by calling
-   `Reamlet.exe --register-host`; file association by
-   `--register-file-assoc`; finish page with "Launch Reamlet" and unticked
-   "Set Reamlet as the default PDF viewer" (`03` §7).
+   `Margin.exe --register-host`; file association by
+   `--register-file-assoc`; finish page with "Launch Margin" and unticked
+   "Set Margin as the default PDF viewer" (`03` §7).
    Installing a newer build of this program over an older one closes a
-   running Reamlet (asks first) and replaces its files; the user's settings,
+   running Margin (asks first) and replaces its files; the user's settings,
    and session carry over because they live in the data folder.
 3. **Uninstaller**: closes running instances, removes files, shortcuts,
    registry entries from `03` §§4.1 and 7,
    leaves the user's data folder unless they tick "also remove settings".
-4. **Portable build**: a zip of `Reamlet.exe`, the engine library (if not
-   statically linked), `reamlet-native-host.exe`,
+4. **Portable build**: a zip of `Margin.exe`, the engine library (if not
+   statically linked), `margin-native-host.exe`,
    licences and a short README. Runs from any folder; helper registration via
    the app (S13).
 5. **Third-party notices** generated from the dependency tree, plus the
@@ -45,7 +45,7 @@ migrated, detected or cleaned up.
 ## Acceptance
 Automated (Windows CI, fresh runner user profile):
 - Silent install → files present, shortcuts present, registry entries exactly
-  as `03` §§4.1 and 7; `Reamlet.exe --exit-after-first-frame` runs from the
+  as `03` §§4.1 and 7; `Margin.exe --exit-after-first-frame` runs from the
   install folder.
 - Install build N, change theme, a toggle and a printer rule, open two tabs with Keep Tabs on, then install build N+1 over it: all of
   those are intact and the session restores.

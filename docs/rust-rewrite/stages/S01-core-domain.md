@@ -5,7 +5,7 @@
 `03` §§2, 3.
 
 ## Goal
-`reamlet-core`: every piece of logic that needs no I/O, no UI and no PDF
+`margin-core`: every piece of logic that needs no I/O, no UI and no PDF
 engine, as plain data types and pure functions with exhaustive unit tests.
 Later stages wire these up; they should rarely need to add logic of their own.
 

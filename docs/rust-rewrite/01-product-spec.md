@@ -13,7 +13,7 @@ logical pixels per point (zoom 1.0 draws one point as one logical pixel).
 ## 1. Window and chrome
 
 ### 1.1 Window
-- Default size 1280 × 900, minimum 640 × 480, title "Reamlet", app icon.
+- Default size 1280 × 900, minimum 640 × 480, title "Margin", app icon.
 - No native title bar: the app draws its own (1.2). All native window behaviour
   is kept: resize from every edge and corner, drag by the title row,
   double-click the title row to maximise/restore, Windows snap (drag to edge,
@@ -30,12 +30,12 @@ logical pixels per point (zoom 1.0 draws one point as one logical pixel).
   — · ☑ Switch to Already-Open Tab · ☑ Restore Tabs After a Crash ·
   ☑ Keep Tabs Between Sessions · — · Settings… · — · Quit.
   The three ☑ items are toggles showing a tick when on; the two session ones
-  carry tooltips ("Reopen your tabs if Reamlet closed without you closing it: a
-  crash, power loss or system restart" / "Reopen your tabs every time Reamlet
+  carry tooltips ("Reopen your tabs if Margin closed without you closing it: a
+  crash, power loss or system restart" / "Reopen your tabs every time Margin
   starts, even after you close it").
 - **View** menu: UI Scaling ▸ (50, 75, 100, 125, 150, 200 %) · — · Fit Width ·
   Fit Height · — · Theme ▸ (Light, Dark, System Default — tick on the current).
-- Centre: the active tab's full file path (or "Reamlet" with no tab), dim,
+- Centre: the active tab's full file path (or "Margin" with no tab), dim,
   12 px, single line. When too long it is truncated **from the start** so the
   file name stays visible.
 - Right: minimise, maximise/restore, close buttons, each 46 px wide; close
@@ -166,7 +166,7 @@ Other Tabs.
   found.`
 
 ### 2.5 Tabs and windows
-- Dragging a tab onto another Reamlet window's tab list moves it there, with
+- Dragging a tab onto another Margin window's tab list moves it there, with
   its unsaved changes, view position and undo history intact. The target
   window comes to the front as the drag enters it.
 - Dragging a tab out and dropping it anywhere that is not a tab list opens a
@@ -595,7 +595,7 @@ preview updates as settings change and never blocks the controls.
   and Print re-enabled.
 
 ### 11.4 Printer by page size (File ▸ Settings…)
-- Dialog "Settings", section "Printer by page size" — "When you print, Reamlet
+- Dialog "Settings", section "Printer by page size" — "When you print, Margin
   selects the printer set here for the document's page size. Pages count as
   the same size whichever way up they are, and within 3 mm."
 - A list of rules, each: size shown as `101.6 × 152.4 mm (4 × 6 in)` (mm to
@@ -623,35 +623,35 @@ preview updates as settings change and never blocks the controls.
 
 ## 12. Opening PDFs from the browser
 
-Reamlet does not download anything itself. A companion **browser extension**
+Margin does not download anything itself. A companion **browser extension**
 lets the browser fetch the PDF — with the user's logins, proxy and
-certificates — and then hands the finished file to Reamlet.
+certificates — and then hands the finished file to Margin.
 
 ### 12.1 What the user sees
 - Clicking a link to a PDF, or starting a PDF download, in a supported browser
   (Chrome, Edge, Brave, Vivaldi, Opera, Opera GX) opens the PDF as a tab in
-  Reamlet instead. This works for sites the user is logged in to.
-- If the browser tab the PDF came from was in the background, the Reamlet tab
-  opens without Reamlet taking focus.
+  Margin instead. This works for sites the user is logged in to.
+- If the browser tab the PDF came from was in the background, the Margin tab
+  opens without Margin taking focus.
 - The browser tab that was heading to the PDF goes back to the page it came
   from; a tab that was opened only for the PDF is closed.
-- **A PDF is never lost.** If Reamlet is not installed, is not responding, or
+- **A PDF is never lost.** If Margin is not installed, is not responding, or
   refuses the file, the browser shows or keeps the PDF exactly as it would
   have without the extension.
-- The Reamlet tab remembers the web address the PDF came from (used for
+- The Margin tab remembers the web address the PDF came from (used for
   Switch to Already-Open Tab and kept in the saved session).
-- No setup: installing Reamlet and installing the extension is all that is
+- No setup: installing Margin and installing the extension is all that is
   needed. There is no extension ID to copy.
 
 ### 12.2 The extension's own controls (toolbar popup)
-- A master switch: "Open PDFs in Reamlet". When off, the toolbar icon shows an
+- A master switch: "Open PDFs in Margin". When off, the toolbar icon shows an
   "OFF" badge and the browser behaves as if the extension were not installed.
 - A per-site switch for the site in the current tab. It is keyed on the site
   the user is **browsing** (the page that linked to the PDF), not on wherever
   the PDF file happens to be hosted. Disabled while the master switch is off.
-- A status line: "PDFs will open in Reamlet." · "PDFs on <site> open
+- A status line: "PDFs will open in Margin." · "PDFs on <site> open
   normally." · "Interception paused — PDFs open normally." · and, when the
-  helper cannot be reached, "Reamlet isn't installed or needs reinstalling."
+  helper cannot be reached, "Margin isn't installed or needs reinstalling."
 - Both switches are remembered.
 
 ### 12.3 What counts as a PDF
@@ -665,7 +665,7 @@ certificates — and then hands the finished file to Reamlet.
   form, are left to the browser.
 
 ### 12.4 Files received from the browser
-- The file is kept in Reamlet's own Downloads folder (`03` §1), under the name
+- The file is kept in Margin's own Downloads folder (`03` §1), under the name
   the browser gave it, made safe for Windows (no path, reserved characters →
   `_`, no trailing dots or spaces, reserved device names prefixed `_`, `.pdf`
   enforced, ≤ 200 characters, "download.pdf" when nothing is left). A taken
@@ -684,14 +684,14 @@ never limited.
 - At most 20 browser opens in any 30 seconds. Once one is refused, all are
   refused until 30 seconds pass with no requests at all. Refused requests do
   not raise the window, and the browser keeps those PDFs.
-- When the flood ends, one warning: title "Reamlet — Too many PDFs from the
-  browser at once"; "Reamlet opened the first 20 PDFs from the browser and
+- When the flood ends, one warning: title "Margin — Too many PDFs from the
+  browser at once"; "Margin opened the first 20 PDFs from the browser and
   left n more with the browser."; detail "If you did not ask for these, turn
-  the Reamlet browser extension off from its toolbar popup."
+  the Margin browser extension off from its toolbar popup."
 
 ## 13. Sessions
 
-- **Restore Tabs After a Crash** (default on): if Reamlet ended without the
+- **Restore Tabs After a Crash** (default on): if Margin ended without the
   user closing it — crash, power loss, Windows restart or log-off — the next
   start reopens the windows and tabs it had, with the same tab order and
   active tab.
@@ -712,9 +712,9 @@ never limited.
 
 ## 14. Single instance and command line
 
-- One Reamlet process runs per user. Launching it again hands the request to
+- One Margin process runs per user. Launching it again hands the request to
   the running one and exits at once.
-- `Reamlet.exe [target] [--background]` — *target* is the first argument that
+- `Margin.exe [target] [--background]` — *target* is the first argument that
   is an existing path ending `.pdf`.
   - Running already: the target opens as a tab in the first window, which is
     restored if minimised and brought to the front — unless `--background`,
@@ -742,13 +742,13 @@ never limited.
 ## 16. Installation and system integration
 
 - **Installer**: per-user, no administrator rights; installs to
-  `%LOCALAPPDATA%\Programs\Reamlet`; desktop and Start-menu shortcuts; final
-  page offers "Launch Reamlet" and an unticked "Set Reamlet as the default PDF
-  viewer". Uninstall closes any running Reamlet and removes everything it
+  `%LOCALAPPDATA%\Programs\Margin`; desktop and Start-menu shortcuts; final
+  page offers "Launch Margin" and an unticked "Set Margin as the default PDF
+  viewer". Uninstall closes any running Margin and removes everything it
   registered.
 - **Portable build**: runs from any folder with no installation; its browser
   helper can be registered and unregistered from the app itself.
-- Reamlet registers as a program that can open `.pdf` (appears in "Open with"
+- Margin registers as a program that can open `.pdf` (appears in "Open with"
   and Windows' default-apps list). Opening a PDF from Explorer uses §14.
 - Licence: GPL-3.0-or-later. Bundled fonts: Liberation Sans (SIL OFL 1.1).
 
@@ -757,12 +757,12 @@ never limited.
 ## 17. Decisions already taken by the owner
 
 **Fresh start.** Nothing written, installed or registered by an earlier
-version of Reamlet needs to be read, migrated or cleaned up: not settings, not
+version of the product (then called Reamlet) needs to be read, migrated or cleaned up: not settings, not
 saved sessions, not registry entries.
 
 **The browser extension is rebuilt as part of this work** (§12, `03` §4, stage
-S13), with a new protocol between it and Reamlet. Reamlet no longer downloads
-from web addresses itself, and `Reamlet.exe <web address>` is not supported.
+S13), with a new protocol between it and Margin. Margin no longer downloads
+from web addresses itself, and `Margin.exe <web address>` is not supported.
 
 **Approved behaviours.** Each row below is a point where an agent who knows
 the earlier product might expect something different. All have been approved
@@ -783,7 +783,7 @@ by the owner and are requirements, not options.
 | 11 | Saves are atomic. | S08 |
 | 12 | UI scaling is remembered. | S03 |
 | 13 | PDFs can be dropped onto the window to open them. | S04 |
-| 14 | The browser downloads PDFs (so logged-in sites work) and hands Reamlet the file; a PDF Reamlet cannot open stays with the browser; no extension ID to enter. | S13 |
+| 14 | The browser downloads PDFs (so logged-in sites work) and hands Margin the file; a PDF Margin cannot open stays with the browser; no extension ID to enter. | S13 |
 | 15 | "Developer Tools" and "Reload App" are gone; a diagnostics overlay replaces them (`04` §2). | S14 |
 | 16 | Windows 11 snap-layout flyout works on the maximise button. | S03 |
 | 17 | Printer preferences never touch the printer's saved defaults, even transiently. | S11 |

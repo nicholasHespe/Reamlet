@@ -50,8 +50,8 @@ All are medians of 10 warm runs (after one discarded run).
 ### 1.4 Size
 | Artefact | Budget |
 |---|---|
-| `Reamlet.exe` + engine library | ≤ 20 MB |
-| `reamlet-native-host.exe` | ≤ 1 MB |
+| `Margin.exe` + engine library | ≤ 20 MB |
+| `margin-native-host.exe` | ≤ 1 MB |
 | Installer | ≤ 15 MB |
 
 ## 2. How performance is measured
@@ -80,10 +80,10 @@ Built in S00, extended by later stages:
 
 | Layer | What | Where it runs |
 |---|---|---|
-| Unit | Pure logic in `reamlet-core`; every numbered behaviour in the spec that is pure has a test named after the behaviour | `cargo test`, everywhere |
-| Engine | Open/measure/render/text against fixture PDFs; golden images compared with a small per-pixel tolerance; cancellation timing | `cargo test -p reamlet-engine` |
-| Writer round-trip | Build a document model → materialise → reopen with lopdf (assert objects per `03` §6) **and** with the engine (assert it renders like the on-screen display list, within tolerance) | `cargo test -p reamlet-pdfwrite` |
-| UI (headless) | `egui_kittest`: drive widgets and the viewport with synthetic input against the fake engine and fake platform; assert state and, where layout matters, snapshot images | `cargo test -p reamlet-ui` |
+| Unit | Pure logic in `margin-core`; every numbered behaviour in the spec that is pure has a test named after the behaviour | `cargo test`, everywhere |
+| Engine | Open/measure/render/text against fixture PDFs; golden images compared with a small per-pixel tolerance; cancellation timing | `cargo test -p margin-engine` |
+| Writer round-trip | Build a document model → materialise → reopen with lopdf (assert objects per `03` §6) **and** with the engine (assert it renders like the on-screen display list, within tolerance) | `cargo test -p margin-pdfwrite` |
+| UI (headless) | `egui_kittest`: drive widgets and the viewport with synthetic input against the fake engine and fake platform; assert state and, where layout matters, snapshot images | `cargo test -p margin-ui` |
 | Platform | Windows-only integration tests for registry, pipe, clipboard, drag source, print-to-PDF; each cleans up after itself and uses unique names | Windows CI job |
 | End-to-end | Launch the real executable with `--data-dir` and `--script`; assert on perf log, files written, exit code | Windows CI job |
 | Corpus | A folder of real-world PDFs (rotated, cropped, encrypted-without-password, huge, malformed, forms, CJK); open + render first page + materialise round-trip must not panic or hang | nightly / before release |
@@ -106,7 +106,7 @@ same rule"), not implementation.
   calls, network, printing, spell-check and registry access all go through the
   worker/engine channels. A debug-build watchdog logs any UI-thread stall over
   8 ms with a backtrace.
-- `unsafe` only in `reamlet-engine` and `reamlet-platform`, each block with a
+- `unsafe` only in `margin-engine` and `margin-platform`, each block with a
   comment stating why it is sound.
 - `cargo xtask perf --check` green.
 - Public items in library crates have doc comments; each crate has a short

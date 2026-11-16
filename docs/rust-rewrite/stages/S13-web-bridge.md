@@ -4,7 +4,7 @@
 **Read first:** spec §§12, 14, 2.3; `03` §§1, 4, 5.
 
 ## Goal
-Clicking a PDF in the browser opens it in Reamlet — including on sites the
+Clicking a PDF in the browser opens it in Margin — including on sites the
 user is logged in to — and a PDF is never lost when something goes wrong.
 Three pieces are built together: the app's side, the native helper, and the
 browser extension.
@@ -48,7 +48,7 @@ internals — not the guarantees in spec §12.1 — and record what changed.
    Helper") — shown only when the helper is not registered for this folder, or
    is registered for it, respectively.
 
-**Helper — `reamlet-native-host.exe`**
+**Helper — `margin-native-host.exe`**
 5. Implements `03` §4.3 exactly: framing, `ping`, `open`, version handling,
    failure codes, starting the app when it is not running, time-outs. No
    runtime dependencies, no window, exits when stdin closes.
@@ -87,7 +87,7 @@ Automated — app (pipe client in the test, fake platform where needed):
 
 Automated — helper (spawned as a child with pipes, against a stub app serving
 the pipe):
-- `ping` with the app running, with it not running, and with no `Reamlet.exe`
+- `ping` with the app running, with it not running, and with no `Margin.exe`
   to be found.
 - `open` relays the app's reply unchanged for `ok`, `not_pdf` and `busy`.
 - App not running: the helper starts it (stub records `--background` when
@@ -117,14 +117,14 @@ End-to-end (Windows CI if a headless Chromium with the unpacked extension
 proves workable in the verification step; otherwise manual and recorded as
 such):
 - A local test site serving a PDF behind a cookie login: clicking the link
-  opens it in Reamlet; the browser tab returns to the linking page.
-- With Reamlet's helper unregistered, the same click shows the PDF in the
+  opens it in Margin; the browser tab returns to the linking page.
+- With Margin's helper unregistered, the same click shows the PDF in the
   browser.
 
-Manual (owner): install the extension in Edge or Chrome with Reamlet
+Manual (owner): install the extension in Edge or Chrome with Margin
 installed; open a PDF from a public site and from a site that needs a login;
 start a PDF download; open a PDF link in a background tab; turn a site off in
-the popup; uninstall Reamlet and confirm PDFs open in the browser again.
+the popup; uninstall Margin and confirm PDFs open in the browser again.
 
 ## Out of scope
 Firefox and Safari. Publishing to browser stores (the README says how; the
