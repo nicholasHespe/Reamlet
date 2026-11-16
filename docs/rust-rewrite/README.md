@@ -31,13 +31,17 @@ Target platform: **Windows 10/11 x64 first.** Platform-specific code sits
 behind one seam so other platforms can follow, but nothing is built or tested
 for them now.
 
+This is a **fresh start**: there is no backwards compatibility with any
+earlier version of Reamlet — no settings, sessions or registry entries to
+migrate. The one outside dependency kept is the browser extension's protocol.
+
 ## The documents
 
 | File | What it is | Who reads it |
 |---|---|---|
 | [01-product-spec.md](01-product-spec.md) | Every user-visible feature and behaviour, with exact constants. The definition of "feature complete". | Everyone, before anything else |
 | [02-architecture.md](02-architecture.md) | The design from first principles: document model, render pipeline, threading, crates, and what is deliberately **not** carried over. | Everyone |
-| [03-external-contracts.md](03-external-contracts.md) | Formats and protocols that must stay compatible: settings and session files, command line, browser-extension protocol, registry entries, saved-PDF annotation format. | Stages that touch them |
+| [03-external-contracts.md](03-external-contracts.md) | Formats and protocols at the program's edges: settings and session files, command line, browser-extension protocol, registry entries, saved-PDF annotation format. | Stages that touch them |
 | [04-quality-and-performance.md](04-quality-and-performance.md) | Performance budgets, how they are measured, test strategy, definition of done, working rules for agents. | Everyone |
 | [stages/](stages/) | One file per stage: goal, scope, deliverables, acceptance tests. | The agent doing that stage |
 | [STATUS.md](STATUS.md) | Ledger of stage state and hand-off notes. Updated at the end of every stage. | Everyone |
@@ -64,7 +68,7 @@ the stages it depends on are marked done in `STATUS.md`.
 | S12 | [Sessions, windows and shell integration](stages/S12-sessions-windows.md) | S08 | Session restore, moving tabs between windows, drag file out, copy file, reveal |
 | S13 | [Web opens and browser bridge](stages/S13-web-bridge.md) | S03 S12 | Open URLs, flood protection, native messaging host, extension ID |
 | S14 | [Polish](stages/S14-polish.md) | S07 S12 | Spell-check, keyboard completeness, accessibility, diagnostics |
-| S15 | [Packaging and release](stages/S15-packaging.md) | all | Installer, portable build, file association, upgrade path, release gates |
+| S15 | [Packaging and release](stages/S15-packaging.md) | all | Installer, portable build, file association, release gates |
 
 Tracks that can run in parallel once their dependencies are met:
 S01, S02 and S03 with each other; S05 with S06; S09, S10, S11 and S12 with each

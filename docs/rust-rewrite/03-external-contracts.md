@@ -1,9 +1,16 @@
 # 03 — External contracts
 
-Things outside the program that other software, existing installations or
-other viewers depend on. These must be implemented exactly as written, so that
-the Rust build is a drop-in upgrade for people already using Reamlet and keeps
-working with the published browser extension.
+Formats and protocols at the program's edges: its own files, its command
+line, the browser-extension bridge, the registry, and what it writes into
+PDFs.
+
+**This is a fresh start.** There is no requirement to read, migrate or clean
+up anything an earlier version of Reamlet wrote, installed or registered. The
+file formats in §§2–3 are this plan's own and may be changed by a stage that
+has a good reason (record it in `STATUS.md`). Two things here are genuinely
+external and must be implemented exactly: the browser-extension wire protocol
+(§4.3), because the extension is a separate published project, and the saved
+PDF format (§6), because other viewers read it.
 
 ---
 
@@ -15,21 +22,9 @@ working with the published browser extension.
 | Settings | `%APPDATA%\Reamlet\settings.json` |
 | Session | `%APPDATA%\Reamlet\session.json` |
 | Downloads kept for tabs | `%APPDATA%\Reamlet\Downloads\` |
-| Legacy download inbox (swept, never written) | `%TEMP%\ReamletDownloads\` |
 | Logs | `%APPDATA%\Reamlet\logs\` |
-| Legacy print journal (see §1.1) | `%APPDATA%\Reamlet\printer-defaults-pending.json` |
 
-The data folder may contain unrelated files left by the previous version;
-ignore anything not listed here.
-
-### 1.1 One-time legacy recovery
-If `printer-defaults-pending.json` exists at start-up it is a note left by the
-previous version that a printer's saved defaults were being borrowed when it
-died. Content: `{"printer": "<name>", "devMode": "<base64 DEVMODEW>"}`. If it
-parses and the blob's length equals `dmSize + dmDriverExtra` (two little-endian
-u16 at byte offsets 68 and 70), write that DEVMODE back as the user's default
-for that printer (`SetPrinter` level 9), then delete the file. If it does not
-parse, delete it. Do this in the background, never on the start-up path.
+Files in the data folder that are not listed here are ignored.
 
 ---
 
@@ -43,7 +38,7 @@ file is treated as `{}`.
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `themeMode` | `"light"` \| `"dark"` \| `"system"` | `"system"` | §1.6 of the spec |
-| `uiScale` | number 0.5–2.0 | `1.0` | UI scaling (new key) |
+| `uiScale` | number 0.5–2.0 | `1.0` | UI scaling |
 | `reuseOpenTab` | boolean | `true` | Switch to Already-Open Tab |
 | `restoreSession` | boolean | `true` | Restore Tabs After a Crash |
 | `persistentTabs` | boolean | `false` | Keep Tabs Between Sessions |
@@ -125,8 +120,8 @@ needed") is on the absolute path, case-insensitively.
 - *Set*: rewrite the manifest with `allowed_origins` =
   `["chrome-extension://<id>/"]` and store `extensionId` in settings.
 - At every start-up (in the background), if settings hold an `extensionId`,
-  re-apply it to the manifest, so an update or reinstall that reset the
-  manifest does not lose it. An unwritable manifest is ignored silently.
+  re-apply it to the manifest, so reinstalling or updating (which rewrites
+  the manifest) does not lose it. An unwritable manifest is ignored silently.
 
 ### 4.3 Wire protocol
 Standard Chrome native messaging: each message, in both directions, is a
@@ -242,7 +237,3 @@ file is written unencrypted; otherwise opening already failed.
   default can only be changed by the user, so the option opens the system
   default-apps page for Reamlet rather than writing protected keys.
 - Uninstall removes all of the above and §4.1.
-
-(The previous installer registered a ProgID named "PDF Document" directly under
-`.pdf`. The uninstaller of the new build should remove that stray default value
-if it equals "PDF Document".)

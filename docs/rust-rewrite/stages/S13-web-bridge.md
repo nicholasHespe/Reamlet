@@ -23,8 +23,7 @@ extension through a tiny native helper.
 4. **Failure aggregation**: one dialog per 1 s burst with the specified
    wording.
 5. **Downloads housekeeping**: at start-up (idle) and hourly, delete files in
-   the Downloads folder and the legacy inbox that are over a day old and not
-   referenced by any open tab or the saved session; never delete a file that
+   the Downloads folder that are over a day old and not referenced by any open tab or the saved session; never delete a file that
    is in use.
 6. **`reamlet-native-host.exe`**: implements `03` §4.3 exactly; no runtime
    dependencies; no window; exits when stdin closes.

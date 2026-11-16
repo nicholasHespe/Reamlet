@@ -61,7 +61,7 @@ engine) confirmed by numbers rather than assumed.
   stop and consult the owner (fallbacks: `02` §3).
 - The engine spike cancels an in-flight page render within 10 ms of the
   request.
-- Owner has signed off the budgets and the list in spec §17.
+- Owner has signed off the budgets. (Spec §17 is already approved.)
 
 ## Out of scope
 Any product feature. The spikes are deleted (or moved under `spikes/` and

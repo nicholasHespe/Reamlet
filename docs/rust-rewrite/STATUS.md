@@ -3,7 +3,7 @@
 Reference machine: _to be recorded in S00_
 Confirmed budgets: _to be confirmed in S00 (see 04-quality-and-performance.md §1)_
 Toolkit / backend / engine decisions: _to be confirmed in S00_
-Owner decisions on spec §17 (deliberate changes): _none recorded yet_
+Owner decisions: fresh start, no backwards compatibility; all 19 behaviours in spec §17 approved (2026-11-16)
 
 | Stage | State | Branch/PR | Date | Notes |
 |---|---|---|---|---|

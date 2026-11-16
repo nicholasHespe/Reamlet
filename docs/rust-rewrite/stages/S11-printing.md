@@ -2,7 +2,7 @@
 
 **Depends on:** S08 (S10 if it has landed, so multi-source documents print;
 otherwise the same `materialise` call covers it later).
-**Read first:** spec §11; `02` §9; `03` §§1.1, 2.
+**Read first:** spec §11; `02` §9; `03` §2.
 
 ## Goal
 A print window with an honest preview, N-up and booklet layouts, driver
@@ -43,8 +43,7 @@ file) and, with the owner, one physical printer:
    (print-flagged, not hidden).
 6. **Settings dialog** (File ▸ Settings…) with the printer-by-page-size editor
    (spec §11.4) and rule application when the print window opens.
-7. **Legacy recovery** (`03` §1.1), in the background at start-up.
-8. Print entry points: Ctrl+P, toolbar, File menu, tab menu (which also
+7. Print entry points: Ctrl+P, toolbar, File menu, tab menu (which also
    activates the tab). Unavailable tabs cannot print.
 
 ## Acceptance
@@ -86,8 +85,6 @@ inspect the result with the engine):
   bar widths or compare against a high-resolution render).
 - The printer's saved defaults (`GetPrinter` level 9 before and after) are
   byte-identical across a print with custom preferences.
-- Legacy recovery: a valid journal file is applied and deleted; an invalid one
-  is deleted without touching any printer.
 
 Performance: opening the print window for the reference document shows the
 first sheet ≤ 300 ms; changing a setting updates the preview on the next frame

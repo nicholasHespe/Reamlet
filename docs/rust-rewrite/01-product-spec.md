@@ -730,13 +730,18 @@ preview updates as settings change and never blocks the controls.
 
 ---
 
-## 17. Deliberate changes from the current product
+## 17. Decisions already taken by the owner
 
-These are places where this spec intentionally differs from how Reamlet
-behaves today, because the new design makes the better behaviour natural. The
-owner should veto any they disagree with before the relevant stage starts.
+**Fresh start.** Nothing written, installed or registered by an earlier
+version of Reamlet needs to be read, migrated or cleaned up: not settings, not
+saved sessions, not registry entries. (The browser-extension protocol is kept,
+because the extension is a separate project — see `03` §4.)
 
-| # | Change | Stage |
+**Approved behaviours.** Each row below is a point where an agent who knows
+the earlier product might expect something different. All have been approved
+by the owner and are requirements, not options.
+
+| # | Behaviour | Stage |
 |---|---|---|
 | 1 | Printing prints the document as it stands; no forced save first, and never-saved documents can print. | S11 |
 | 2 | Unsaved annotations survive page reorder, footer, watermark, combining, and moving a tab to another window (today they are discarded or need a prompt). | S10 S12 |
